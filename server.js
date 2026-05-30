@@ -14,11 +14,8 @@ app.use(express.json());
 let krxCache = { loadedAt: 0, items: [] };
 
 function decodeEucKr(buffer) {
-  try {
-    return new TextDecoder('euc-kr').decode(buffer);
-  } catch {
-    return new TextDecoder('utf-8').decode(buffer);
-  }
+  try { return new TextDecoder('euc-kr').decode(buffer); }
+  catch { return new TextDecoder('utf-8').decode(buffer); }
 }
 
 async function loadKrxList() {
@@ -29,12 +26,7 @@ async function loadKrxList() {
   try {
     const res = await fetch(
       'https://kind.krx.co.kr/corpgeneral/corpList.do?method=download&searchType=13',
-      {
-        headers: {
-          'User-Agent': 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36',
-          'Accept-Language': 'ko-KR,ko;q=0.9,en;q=0.8',
-        },
-      }
+      { headers: { 'User-Agent': 'Mozilla/5.0', 'Accept-Language': 'ko-KR,ko;q=0.9' } }
     );
     if (!res.ok) throw new Error(`KRX responded ${res.status}`);
     const html = decodeEucKr(new Uint8Array(await res.arrayBuffer()));
@@ -60,13 +52,39 @@ async function loadKrxList() {
   }
 }
 
-// ─── 검색 ───
+// ─── 지수 심볼 정의 ─────────────────────────────────────
+const INDEX_MAP = {
+  // 한국 지수
+  'KOSPI': { symbol: '^KS11',  name: 'KOSPI 종합',    exchange: 'KRX' },
+  'KOSDAQ':{ symbol: '^KQ11',  name: 'KOSDAQ 종합',   exchange: 'KRX' },
+  // 미국 지수
+  'S&P500': { symbol: '^GSPC', name: 'S&P 500',       exchange: 'NYSE' },
+  'SP500':  { symbol: '^GSPC', name: 'S&P 500',       exchange: 'NYSE' },
+  'NASDAQ': { symbol: '^IXIC', name: 'NASDAQ 종합',   exchange: 'NASDAQ' },
+  'DOW':    { symbol: '^DJI',  name: 'Dow Jones',      exchange: 'NYSE' },
+  'DOWJONES':{ symbol:'^DJI',  name: 'Dow Jones',      exchange: 'NYSE' },
+  'VIX':    { symbol: '^VIX',  name: 'VIX 공포지수',  exchange: 'CBOE' },
+  'NIKKEI': { symbol: '^N225', name: 'Nikkei 225',    exchange: 'JPX' },
+  'HANGSENG':{ symbol:'^HSI',  name: 'Hang Seng',     exchange: 'HKEX' },
+};
+
+function findIndex(q) {
+  const upper = q.toUpperCase().replace(/\s/g, '');
+  return INDEX_MAP[upper] || null;
+}
+
+// ─── 검색 ───────────────────────────────────────────────
 app.get('/api/search', async (req, res) => {
   try {
     const { q } = req.query;
     if (!q || q.trim().length < 1) return res.json([]);
-
     const query = q.trim().toLowerCase();
+    const upperQ = q.trim().toUpperCase().replace(/\s/g, '');
+
+    // 지수 검색
+    const indexMatches = Object.entries(INDEX_MAP)
+      .filter(([key]) => key.includes(upperQ) || upperQ.includes(key.slice(0, 3)))
+      .map(([, v]) => ({ symbol: v.symbol, name: v.name, exchange: v.exchange, type: 'INDEX' }));
 
     // 한국 종목 검색 (KRX)
     const krxList = await loadKrxList();
@@ -80,31 +98,31 @@ app.get('/api/search', async (req, res) => {
         type: 'KR',
       }));
 
-    // 미국 종목 검색 (Yahoo Finance)
+    // 미국 종목/지수 검색 (Yahoo Finance)
     let usMatches = [];
     try {
       const result = await yahooFinance.search(q, { quotesCount: 10 });
       usMatches = (result.quotes || [])
-        .filter(x => (x.quoteType === 'EQUITY' || x.quoteType === 'ETF') && !x.symbol.includes('.'))
+        .filter(x => ['EQUITY','ETF','INDEX','FUTURE'].includes(x.quoteType) && !x.symbol.match(/\.(KS|KQ|T|HK|AX)$/))
         .slice(0, 10)
         .map(x => ({
           symbol: x.symbol,
           name: x.shortname || x.longname || x.symbol,
           exchange: x.exchange || 'US',
-          type: 'US',
+          type: x.quoteType === 'INDEX' ? 'INDEX' : 'US',
         }));
     } catch (e) {
       console.error('Yahoo search error:', e.message);
     }
 
-    res.json([...krxMatches, ...usMatches]);
+    res.json([...indexMatches, ...krxMatches, ...usMatches]);
   } catch (e) {
     console.error('Search error:', e.message);
     res.status(500).json({ error: e.message });
   }
 });
 
-// ─── OHLCV 히스토리 ───
+// ─── OHLCV ─────────────────────────────────────────────
 function parseNumeric(text) {
   const s = String(text || '').replace(/,/g, '').trim();
   if (!s || /^N\/?[AD]$/i.test(s)) return null;
@@ -113,9 +131,10 @@ function parseNumeric(text) {
 }
 
 async function fetchKoreanOhlcv(code, interval, limit) {
-  // Naver for daily
   if (interval === 'day') {
-    const url = `https://fchart.stock.naver.com/sise.nhn?symbol=${encodeURIComponent(code)}&timeframe=day&count=${limit + 300}&requestType=0`;
+    // 넉넉하게 요청 (최대 2500)
+    const fetchCount = Math.min(limit + 300, 2500);
+    const url = `https://fchart.stock.naver.com/sise.nhn?symbol=${encodeURIComponent(code)}&timeframe=day&count=${fetchCount}&requestType=0`;
     const res = await fetch(url, {
       headers: { 'User-Agent': 'Mozilla/5.0', 'Accept-Language': 'ko-KR,ko;q=0.9' },
     });
@@ -134,9 +153,13 @@ async function fetchKoreanOhlcv(code, interval, limit) {
       .filter(x => x.open !== null && x.close !== null);
     return rows.slice(-limit);
   }
-  // For intraday Korean stocks, use Yahoo Finance with .KS suffix
+  // 분봉: Yahoo Finance with .KS suffix
   const suffix = code.endsWith('.KS') || code.endsWith('.KQ') ? code : code + '.KS';
   return fetchUsOhlcv(suffix, interval, limit);
+}
+
+async function fetchIndexOhlcv(symbol, interval, limit) {
+  return fetchUsOhlcv(symbol, interval, limit);
 }
 
 const ohlcvCache = new Map();
@@ -144,8 +167,8 @@ async function fetchUsOhlcv(symbol, interval, limit) {
   const cacheKey = `${symbol}:${interval}:${limit}`;
   const now = Date.now();
   const cached = ohlcvCache.get(cacheKey);
-  // Cache 5 min for intraday, 1 hour for daily
-  const ttl = interval === 'day' ? 3600000 : 300000;
+  // 분봉 5분, 일봉 1시간 캐시
+  const ttl = ['day','week','month'].includes(interval) ? 3600000 : 300000;
   if (cached && now - cached.ts < ttl) return cached.data;
 
   const intervalMap = {
@@ -155,31 +178,33 @@ async function fetchUsOhlcv(symbol, interval, limit) {
   };
   const yInterval = intervalMap[interval] || '1d';
 
-  // Determine period1 based on interval
-  const daysBack = {
-    '1m': 7, '3m': 7, '5m': 30, '10m': 30, '15m': 60,
-    '30m': 60, '60m': 60, '1h': 60, 'day': 700, 'week': 1500, 'month': 3000,
-  }[interval] || 365;
-  const period1 = new Date(Date.now() - daysBack * 24 * 3600000).toISOString().slice(0, 10);
+  // 요청 기간 = limit에 맞게 충분히 크게
+  const daysPerBar = { '1m': 1/390, '3m': 3/390, '5m': 5/390, '15m': 15/390,
+    '30m': 0.1, '60m': 0.2, '1h': 0.2, 'day': 1, 'week': 7, 'month': 30 };
+  const daysPer = daysPerBar[interval] || 1;
+  // 충분한 여유를 두어 limit보다 많이 가져옴 (주말, 공휴일 고려 ×2)
+  const daysBack = Math.ceil(limit * daysPer * 2) + 60;
+  const maxDays = { '1m': 7, '3m': 30, '5m': 60, '15m': 60, '30m': 90, '60m': 180, '1h': 180 };
+  const actualDays = Math.min(daysBack, maxDays[interval] || daysBack);
+  const period1 = new Date(Date.now() - actualDays * 24 * 3600000).toISOString().slice(0, 10);
 
   const result = await yahooFinance.chart(symbol, { period1, interval: yInterval });
   const quotes = (result.quotes || [])
     .map(q => {
       const d = new Date(q.date);
-      // For daily: use date string, for intraday: use unix timestamp
-      const time = yInterval === '1d' || yInterval === '1wk' || yInterval === '1mo'
+      const time = ['1d','1wk','1mo'].includes(yInterval)
         ? d.toISOString().slice(0, 10)
         : Math.floor(d.getTime() / 1000);
       return {
         time,
-        open: q.open ?? null,
-        high: q.high ?? null,
-        low: q.low ?? null,
-        close: q.close ?? null,
+        open:   q.open   ?? null,
+        high:   q.high   ?? null,
+        low:    q.low    ?? null,
+        close:  q.close  ?? null,
         volume: q.volume ?? null,
       };
     })
-    .filter(x => x.open !== null && x.close !== null)
+    .filter(x => x.open !== null && x.close !== null && x.high !== null && x.low !== null)
     .slice(-limit);
 
   ohlcvCache.set(cacheKey, { ts: now, data: quotes });
@@ -191,26 +216,36 @@ app.get('/api/ohlcv', async (req, res) => {
     const { symbol, interval = 'day', limit = 300 } = req.query;
     if (!symbol) return res.status(400).json({ error: 'symbol required' });
 
-    const lim = Math.min(Number(limit) || 300, 1000);
+    // ⑤ 최대 2000까지 허용
+    const lim = Math.min(Number(limit) || 300, 2000);
     let data;
 
-    // Detect Korean stock (6-digit code or .KS/.KQ suffix)
     const isKorean = /^\d{6}$/.test(symbol) || symbol.endsWith('.KS') || symbol.endsWith('.KQ');
+    const isIndex  = symbol.startsWith('^');
     const code = symbol.replace(/\.(KS|KQ)$/, '');
 
-    if (isKorean && interval === 'day') {
+    if (isIndex) {
+      data = await fetchIndexOhlcv(symbol, interval, lim);
+    } else if (isKorean && interval === 'day') {
       data = await fetchKoreanOhlcv(code, interval, lim);
-      // Convert Naver date format (YYYYMMDD) to YYYY-MM-DD
       data = data.map(x => ({
         ...x,
         time: x.date
           ? x.date.replace(/(\d{4})(\d{2})(\d{2})/, '$1-$2-$3')
           : x.time,
       }));
-    } else {
+    } else if (isKorean) {
       const sym = isKorean ? code + '.KS' : symbol;
       data = await fetchUsOhlcv(sym, interval, lim);
+    } else {
+      data = await fetchUsOhlcv(symbol, interval, lim);
     }
+
+    // 중복 time 제거 및 정렬
+    const seen = new Set();
+    data = data
+      .filter(d => { if (seen.has(d.time)) return false; seen.add(d.time); return true; })
+      .sort((a, b) => (a.time > b.time ? 1 : -1));
 
     res.json(data);
   } catch (e) {

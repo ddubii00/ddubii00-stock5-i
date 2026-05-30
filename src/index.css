@@ -50,11 +50,11 @@ html, body {
 
 .app-subtitle { font-size: 12px; color: var(--muted); }
 
-/* ── GRID: 1 col mobile, 2 col otherwise ── */
+/* ── GRID: 1 col mobile, 2×2 otherwise ── */
 .dashboard-grid {
   display: grid;
-  gap: 16px;           /* ⑥ gap between two chart columns */
-  padding: 12px;
+  gap: 12px;
+  padding: 10px;
   align-items: start;
 }
 
