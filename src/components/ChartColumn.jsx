@@ -36,6 +36,7 @@ const MA_PERIODS = [5, 10, 20, 60, 120];
 const MA_COLORS  = ['#f59e0b', '#22c55e', '#a855f7', '#06b6d4', '#64748b'];
 const INTRA_INTERVALS = ['1m','3m','5m','15m','30m','60m'];
 const PRICE_SCALE_WIDTH = 92;
+const ICHIMOKU_DISPLACEMENT = 26;
 
 // ④ 마지막 종가 수평 점선 제거를 위한 헬퍼
 const NO_PRICE_LINE = { priceLineVisible: false, lastValueVisible: false };
@@ -119,6 +120,29 @@ function timeKey(time) {
   return String(time);
 }
 
+function barSeconds(interval) {
+  return {
+    '1m': 60,
+    '3m': 180,
+    '5m': 300,
+    '15m': 900,
+    '30m': 1800,
+    '60m': 3600,
+    '1h': 3600,
+    day: 86400,
+    week: 7 * 86400,
+    month: 30 * 86400,
+  }[interval] || 86400;
+}
+
+function projectTime(time, interval, bars) {
+  if (typeof time === 'number') return time + barSeconds(interval) * bars;
+  const base = String(time || '').includes('T') ? new Date(time) : new Date(`${time}T00:00:00Z`);
+  if (Number.isNaN(base.getTime())) return time;
+  const projected = new Date(base.getTime() + barSeconds(interval) * bars * 1000);
+  return projected.toISOString().slice(0, 10);
+}
+
 function isMarketOpen() {
   const now = new Date();
   const day = now.getUTCDay();
@@ -190,6 +214,8 @@ export default function ChartColumn({ id, defaultSymbol, defaultName }) {
   const [ichiTf,     setIchiTf]     = useState(ICHI_TFS[5]);   // 일봉 default
   const [limit,      setLimit]      = useState(120);
   const [limitInput, setLimitInput] = useState('120');
+  const [ichiLimit,  setIchiLimit]  = useState(120);
+  const [ichiLimitInput, setIchiLimitInput] = useState('120');
   const [loading,    setLoading]    = useState(false);
   const [error,      setError]      = useState('');
   const [chartsReady, setChartsReady] = useState(false);
@@ -405,7 +431,7 @@ export default function ChartColumn({ id, defaultSymbol, defaultName }) {
     // MA 라인들
     ser.current.maLines = MA_PERIODS.map((_, idx) =>
       pc.addSeries(LineSeries, {
-        color: MA_COLORS[idx], lineWidth: 1,
+        color: MA_COLORS[idx], lineWidth: 2,
         crosshairMarkerVisible: false,
         priceFormat: { type: 'custom', formatter: (price) => formatPriceLabel(price, symbolRef.current) },
         ...NO_PRICE_LINE,
@@ -705,19 +731,31 @@ export default function ChartColumn({ id, defaultSymbol, defaultName }) {
 
     const candles = normalizeCandleData(data);
     if (!candles.length) throw new Error('일목균형표 데이터가 비어 있습니다.');
-    ser.current.ichiCandle.setData(candles);
+    const visibleCandles = candles.slice(-ichiLimit);
+    ser.current.ichiCandle.setData(visibleCandles);
     const ichi = calculateIchimoku(candles);
+    const visibleIchi = ichi.slice(-ichiLimit);
 
-    const spanAData = ichi.map((d, i) => ({ time: candles[i]?.time, value: d.senkouA })).filter(d => d.time != null);
-    const spanBData = ichi.map((d, i) => ({ time: candles[i]?.time, value: d.senkouB })).filter(d => d.time != null);
+    const spanAData = visibleIchi
+      .map((d, i) => d.senkouA != null ? ({
+        time: projectTime(visibleCandles[i]?.time, tf.interval, ICHIMOKU_DISPLACEMENT),
+        value: d.senkouA,
+      }) : null)
+      .filter(d => d?.time != null);
+    const spanBData = visibleIchi
+      .map((d, i) => d.senkouB != null ? ({
+        time: projectTime(visibleCandles[i]?.time, tf.interval, ICHIMOKU_DISPLACEMENT),
+        value: d.senkouB,
+      }) : null)
+      .filter(d => d?.time != null);
 
-    ser.current.tenkan.setData(safeLineData(ichi.map((d, i) => ({ time: candles[i]?.time, value: d.tenkan })).filter(d => d.time != null)));
-    ser.current.kijun.setData( safeLineData(ichi.map((d, i) => ({ time: candles[i]?.time, value: d.kijun  })).filter(d => d.time != null)));
-    ser.current.chikou.setData(safeLineData(ichi.map((d, i) => ({ time: candles[i]?.time, value: d.chikou })).filter(d => d.time != null)));
+    ser.current.tenkan.setData(safeLineData(visibleIchi.map((d, i) => ({ time: visibleCandles[i]?.time, value: d.tenkan })).filter(d => d.time != null)));
+    ser.current.kijun.setData( safeLineData(visibleIchi.map((d, i) => ({ time: visibleCandles[i]?.time, value: d.kijun  })).filter(d => d.time != null)));
+    ser.current.chikou.setData(safeLineData(visibleIchi.map((d, i) => ({ time: visibleCandles[i]?.time, value: d.chikou })).filter(d => d.time != null)));
     ser.current.spanA.setData( safeLineData(spanAData));
     ser.current.spanB.setData( safeLineData(spanBData));
     drawCloud(spanAData, spanBData);
-  }, [drawCloud]);
+  }, [drawCloud, ichiLimit]);
 
   // symbol/tf/limit 변경 시 로드
   useEffect(() => {
@@ -730,13 +768,13 @@ export default function ChartColumn({ id, defaultSymbol, defaultName }) {
       fetchMain(symbol, mainTf, limit).catch(e => {
         if (!String(e.message || '').includes('Value is null')) setError(e.message);
       }),
-      fetchIchi(symbol, ichiTf, limit + 80).catch(() => {}),
+      fetchIchi(symbol, ichiTf, ichiLimit).catch(() => {}),
     ]).finally(() => {
       clearTimeout(timer);
       setLoading(false);
     });
     return () => clearTimeout(timer);
-  }, [symbol, mainTf, ichiTf, limit, loadVersion, fetchMain, fetchIchi]);
+  }, [symbol, mainTf, ichiTf, limit, ichiLimit, loadVersion, fetchMain, fetchIchi]);
 
   useEffect(() => {
     if (!charts.current.price) return;
@@ -764,16 +802,24 @@ export default function ChartColumn({ id, defaultSymbol, defaultName }) {
     const isIntra = INTRA_INTERVALS.includes(ichiTf.interval);
     const ms = isIntra ? 1000 : 5000;
     const t = setInterval(() => {
-      if (isMarketOpen()) fetchIchi(symbol, ichiTf, limit + 80).catch(() => {});
+      if (isMarketOpen()) fetchIchi(symbol, ichiTf, ichiLimit).catch(() => {});
     }, ms);
     return () => clearInterval(t);
-  }, [symbol, ichiTf, limit, chartsReady, fetchIchi]);
+  }, [symbol, ichiTf, ichiLimit, chartsReady, fetchIchi]);
 
   const applyLimit = () => {
     const n = parseInt(limitInput, 10);
     if (n > 0 && n <= 2000) {
       setLimit(n);
       setLimitInput(String(n));
+    }
+  };
+
+  const applyIchiLimit = () => {
+    const n = parseInt(ichiLimitInput, 10);
+    if (n > 0 && n <= 2000) {
+      setIchiLimit(n);
+      setIchiLimitInput(String(n));
     }
   };
 
@@ -873,6 +919,20 @@ export default function ChartColumn({ id, defaultSymbol, defaultName }) {
                 {tf.label}
               </button>
             ))}
+          </div>
+          <div className="period-group">
+            <label className="tf-label" htmlFor={`ichi-period-${id}`}>기간</label>
+            <input
+              id={`ichi-period-${id}`}
+              className="period-input"
+              type="number"
+              min="10"
+              max="2000"
+              value={ichiLimitInput}
+              onChange={e => setIchiLimitInput(e.target.value)}
+              onBlur={applyIchiLimit}
+              onKeyDown={e => e.key === 'Enter' && applyIchiLimit()}
+            />
           </div>
         </div>
 
