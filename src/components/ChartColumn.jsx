@@ -187,9 +187,6 @@ function normalizeCandleData(arr) {
 function safeLineData(arr) {
   return arr.filter(d => d != null && Number.isFinite(d.value));
 }
-function safeHistData(arr) {
-  return arr.filter(d => d != null && Number.isFinite(d.value));
-}
 
 const BASE_OPTS = {
   layout: {
@@ -694,35 +691,41 @@ export default function ChartColumn({ id, defaultSymbol, defaultName }) {
 
     // 거래량
     const volData = candles
-      .filter(d => d.volume != null && Number.isFinite(+d.volume))
       .map((d, i) => {
         const currentVolume = +d.volume;
         const previousVolume = candles[i - 1]?.volume;
+        if (!Number.isFinite(currentVolume)) return { time: d.time };
         return {
           time: d.time,
           value: currentVolume,
           color: volumeColorByChange(currentVolume, previousVolume),
         };
       });
-    ser.current.vol.setData(volData.filter(d => Number.isFinite(d.value)));
-    crosshairValueMapsRef.current.volume = new Map(volData.map(d => [timeKey(d.time), d.value]));
+    ser.current.vol.setData(volData);
+    crosshairValueMapsRef.current.volume = new Map(volData.filter(d => Number.isFinite(d.value)).map(d => [timeKey(d.time), d.value]));
 
     // MACD
     const macd = calculateMACD(candles);
     macdDataRef.current = macd;
-    const macdHistData = safeHistData(
-      macd
-        .filter(d => Number.isFinite(d.histogram))
-        .map(d => ({
+    const macdHistData = macd.map(d => (
+      Number.isFinite(d.histogram)
+        ? {
           time: d.time,
           value: d.histogram,
           color: d.histogram >= 0 ? '#ef5350' : '#1565c0',
-        }))
-    );
+        }
+        : { time: d.time }
+    ));
+    const macdLineData = macd.map(d => (
+      Number.isFinite(d.macd) ? { time: d.time, value: d.macd } : { time: d.time }
+    ));
+    const signalData = macd.map(d => (
+      Number.isFinite(d.signal) ? { time: d.time, value: d.signal } : { time: d.time }
+    ));
     ser.current.macdHist.setData(macdHistData);
-    crosshairValueMapsRef.current.macd = new Map(macdHistData.map(d => [timeKey(d.time), d.value]));
-    ser.current.macdLine.setData(safeLineData(macd.filter(d => Number.isFinite(d.macd   )).map(d => ({ time: d.time, value: d.macd    }))));
-    ser.current.signal.setData(  safeLineData(macd.filter(d => Number.isFinite(d.signal )).map(d => ({ time: d.time, value: d.signal  }))));
+    crosshairValueMapsRef.current.macd = new Map(macdHistData.filter(d => Number.isFinite(d.value)).map(d => [timeKey(d.time), d.value]));
+    ser.current.macdLine.setData(macdLineData);
+    ser.current.signal.setData(signalData);
 
     // ③ MACD 배경 그리기 (약간 지연 → 차트 렌더 후)
     requestAnimationFrame(() => {
@@ -794,7 +797,7 @@ export default function ChartColumn({ id, defaultSymbol, defaultName }) {
         try {
           charts.current.ichi?.timeScale().setVisibleLogicalRange({
             from: Math.max(0, candles.length - visibleCount),
-            to: Math.max(0, candles.length - 1),
+            to: Math.max(0, candles.length - 1 + ICHIMOKU_DISPLACEMENT),
           });
         } catch (e) {
           console.warn('Ichi visible range sync skipped:', e);
