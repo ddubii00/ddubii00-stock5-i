@@ -347,9 +347,7 @@ export default function ChartColumn({ id, defaultSymbol, defaultName }) {
     const ts = macdChart.timeScale();
     let prevX = null, prevFill = null;
     let firstX = null, firstFill = null;
-    const plotRight = typeof ts.width === 'function'
-      ? ts.width()
-      : Math.max(0, rect.width - PRICE_SCALE_WIDTH);
+    const plotRight = rect.width;
 
     for (let i = 0; i < macdData.length; i++) {
       const d = macdData[i];
