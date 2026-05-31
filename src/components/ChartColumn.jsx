@@ -45,6 +45,7 @@ function isIntradayTf(tf) {
 }
 
 function requestLimit(tf, baseLimit) {
+  if (!isIntradayTf(tf)) return Math.min(baseLimit + 120, 2000);
   return Math.min(Math.max(baseLimit, 10), 2000);
 }
 
@@ -632,18 +633,19 @@ export default function ChartColumn({ id, defaultSymbol, defaultName }) {
     // ② null 값 필터링
     const candles = normalizeCandleData(data);
     if (!candles.length) throw new Error('시세 데이터가 비어 있습니다.');
-    ser.current.candle.setData(candles);
-    crosshairValueMapsRef.current.candle = new Map(candles.map(d => [timeKey(d.time), d.close]));
+    const visibleCandles = candles.slice(-lim);
+    ser.current.candle.setData(visibleCandles);
+    crosshairValueMapsRef.current.candle = new Map(visibleCandles.map(d => [timeKey(d.time), d.close]));
 
     // MA 계산 및 팝업용 맵 저장
     maMaps.current = MA_PERIODS.map((period, idx) => {
       const maData = calculateMA(candles, period);
-      ser.current.maLines[idx]?.setData(safeLineData(maData));
+      ser.current.maLines[idx]?.setData(safeLineData(maData).slice(-lim));
       return buildTimeMap(maData);
     });
 
     // 거래량
-    const volData = candles
+    const volData = visibleCandles
       .filter(d => d.volume != null && Number.isFinite(+d.volume))
       .map(d => ({ time: d.time, value: +d.volume, color: d.close >= d.open ? '#ef5350' : '#1565c0' }));
     ser.current.vol.setData(volData.filter(d => Number.isFinite(d.value)));
@@ -651,9 +653,10 @@ export default function ChartColumn({ id, defaultSymbol, defaultName }) {
 
     // MACD
     const macd = calculateMACD(candles);
-    macdDataRef.current = macd;
+    const visibleMacd = macd.slice(-lim);
+    macdDataRef.current = visibleMacd;
     const macdHistData = safeHistData(
-      macd
+      visibleMacd
         .filter(d => Number.isFinite(d.histogram))
         .map(d => ({
           time: d.time,
@@ -663,8 +666,8 @@ export default function ChartColumn({ id, defaultSymbol, defaultName }) {
     );
     ser.current.macdHist.setData(macdHistData);
     crosshairValueMapsRef.current.macd = new Map(macdHistData.map(d => [timeKey(d.time), d.value]));
-    ser.current.macdLine.setData(safeLineData(macd.filter(d => Number.isFinite(d.macd   )).map(d => ({ time: d.time, value: d.macd    }))));
-    ser.current.signal.setData(  safeLineData(macd.filter(d => Number.isFinite(d.signal )).map(d => ({ time: d.time, value: d.signal  }))));
+    ser.current.macdLine.setData(safeLineData(visibleMacd.filter(d => Number.isFinite(d.macd   )).map(d => ({ time: d.time, value: d.macd    }))));
+    ser.current.signal.setData(  safeLineData(visibleMacd.filter(d => Number.isFinite(d.signal )).map(d => ({ time: d.time, value: d.signal  }))));
 
     // ③ MACD 배경 그리기 (약간 지연 → 차트 렌더 후)
     requestAnimationFrame(() => {
