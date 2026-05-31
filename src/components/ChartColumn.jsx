@@ -95,6 +95,30 @@ function volumeColorByChange(currentVolume, previousVolume) {
   return currentVolume >= previousVolume ? '#ef5350' : '#1565c0';
 }
 
+function koreanMarketMinute(time) {
+  if (typeof time !== 'number') return null;
+  const parts = new Intl.DateTimeFormat('en-US', {
+    timeZone: 'Asia/Seoul',
+    hour: '2-digit',
+    minute: '2-digit',
+    hour12: false,
+  }).formatToParts(new Date(time * 1000));
+  const hour = Number(parts.find(p => p.type === 'hour')?.value);
+  const minute = Number(parts.find(p => p.type === 'minute')?.value);
+  if (!Number.isFinite(hour) || !Number.isFinite(minute)) return null;
+  return hour * 60 + minute;
+}
+
+function filterKoreanRegularIntraday(candles, symbol, tf) {
+  if (!isKoreanSymbol(symbol) || !isIntradayTf(tf)) return candles;
+  const open = 9 * 60;
+  const regularClose = 15 * 60 + 20;
+  return candles.filter((candle) => {
+    const minute = koreanMarketMinute(candle.time);
+    return minute == null || (minute >= open && minute <= regularClose);
+  });
+}
+
 function formatAxisTime(time, zone) {
   if (typeof time === 'string') {
     const normalized = time.replace('T', ' ').replace('Z', '');
@@ -809,7 +833,7 @@ export default function ChartColumn({ id, defaultSymbol, defaultName }) {
       return;
     }
 
-    const candles = normalizeCandleData(data);
+    const candles = filterKoreanRegularIntraday(normalizeCandleData(data), sym, tf);
     if (!candles.length) throw new Error('일목균형표 데이터가 비어 있습니다.');
     ser.current.ichiCandle.setData(candles);
     const ichi = calculateIchimoku(candles);
