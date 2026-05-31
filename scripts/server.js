@@ -3,13 +3,14 @@ import { existsSync } from 'node:fs';
 import express from 'express';
 import cors from 'cors';
 import YahooFinance from 'yahoo-finance2';
+import { analyzeCharts } from '../api/_analyze.js';
 
 const yahooFinance = new YahooFinance();
 const app = express();
 const PORT = process.env.PORT || 3001;
 
 app.use(cors());
-app.use(express.json());
+app.use(express.json({ limit: '25mb' }));
 
 let krxCache = { loadedAt: 0, items: [] };
 const ohlcvCache = new Map();
@@ -234,6 +235,16 @@ app.get('/api/ohlcv', async (req, res) => {
     return res.json(data);
   } catch (e) {
     console.error(`OHLCV error [${req.query.symbol}]:`, e.message);
+    return res.status(500).json({ error: e.message });
+  }
+});
+
+app.post('/api/analyze', async (req, res) => {
+  try {
+    const result = await analyzeCharts(req.body);
+    return res.json({ result });
+  } catch (e) {
+    console.error('Analyze error:', e.message);
     return res.status(500).json({ error: e.message });
   }
 });

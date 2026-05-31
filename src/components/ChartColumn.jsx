@@ -124,6 +124,52 @@ function filterKoreanRegularIntraday(candles, symbol, tf) {
   });
 }
 
+function drawLabel(ctx, text, scale) {
+  if (!text) return;
+  ctx.font = `${11 * scale}px Inter, sans-serif`;
+  const paddingX = 5 * scale;
+  const paddingY = 3 * scale;
+  const x = 10 * scale;
+  const y = 5 * scale;
+  const width = ctx.measureText(text).width + paddingX * 2;
+  const height = 20 * scale;
+  ctx.fillStyle = 'rgba(255,255,255,0.88)';
+  ctx.fillRect(x, y, width, height);
+  ctx.fillStyle = '#6b7280';
+  ctx.fillText(text, x + paddingX, y + height - paddingY - 3 * scale);
+}
+
+async function captureChartSection(section, label) {
+  if (!section) throw new Error(`${label} 영역을 찾을 수 없습니다.`);
+  await new Promise(resolve => requestAnimationFrame(resolve));
+
+  const rect = section.getBoundingClientRect();
+  const maxWidth = 1100;
+  const scale = Math.min(window.devicePixelRatio || 1, maxWidth / Math.max(rect.width, 1), 1.5);
+  const canvas = document.createElement('canvas');
+  canvas.width = Math.max(1, Math.round(rect.width * scale));
+  canvas.height = Math.max(1, Math.round(rect.height * scale));
+
+  const ctx = canvas.getContext('2d');
+  ctx.fillStyle = '#f7f9fc';
+  ctx.fillRect(0, 0, canvas.width, canvas.height);
+
+  [...section.querySelectorAll('canvas')].forEach(source => {
+    const sourceRect = source.getBoundingClientRect();
+    if (!sourceRect.width || !sourceRect.height) return;
+    ctx.drawImage(
+      source,
+      Math.round((sourceRect.left - rect.left) * scale),
+      Math.round((sourceRect.top - rect.top) * scale),
+      Math.round(sourceRect.width * scale),
+      Math.round(sourceRect.height * scale)
+    );
+  });
+
+  drawLabel(ctx, section.querySelector('.chart-label')?.textContent?.trim() || label, scale);
+  return { label, dataUrl: canvas.toDataURL('image/png') };
+}
+
 function formatAxisTime(time, zone) {
   if (typeof time === 'string') {
     const normalized = time.replace('T', ' ').replace('Z', '');
@@ -269,6 +315,10 @@ export default function ChartColumn({ id, defaultSymbol, defaultName }) {
   const [ichiLimitInput, setIchiLimitInput] = useState('120');
   const [loading,    setLoading]    = useState(false);
   const [error,      setError]      = useState('');
+  const [analysisOpen, setAnalysisOpen] = useState(false);
+  const [analysisLoading, setAnalysisLoading] = useState(false);
+  const [analysisError, setAnalysisError] = useState('');
+  const [analysisResult, setAnalysisResult] = useState('');
   const [chartsReady, setChartsReady] = useState(false);
   const [loadVersion, setLoadVersion] = useState(0);
   const [mainVisible, setMainVisible] = useState({
@@ -289,6 +339,10 @@ export default function ChartColumn({ id, defaultSymbol, defaultName }) {
   });
 
   // DOM refs
+  const priceSectionRef = useRef(null);
+  const volumeSectionRef = useRef(null);
+  const macdSectionRef = useRef(null);
+  const ichiSectionRef = useRef(null);
   const priceRef   = useRef(null);
   const volumeRef  = useRef(null);
   const macdRef    = useRef(null);
@@ -947,6 +1001,43 @@ export default function ChartColumn({ id, defaultSymbol, defaultName }) {
     }
   };
 
+  const handleAnalyze = async () => {
+    setAnalysisOpen(true);
+    setAnalysisLoading(true);
+    setAnalysisError('');
+    setAnalysisResult('');
+
+    try {
+      const images = await Promise.all([
+        captureChartSection(priceSectionRef.current, '캔들차트'),
+        captureChartSection(volumeSectionRef.current, '거래량차트'),
+        captureChartSection(macdSectionRef.current, 'MACD'),
+        captureChartSection(ichiSectionRef.current, '일목균형표'),
+      ]);
+
+      const response = await fetch('/api/analyze', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          symbol,
+          symbolName,
+          mainTf: mainTf.label,
+          limit,
+          ichiTf: ichiTf.label,
+          ichiLimit,
+          images,
+        }),
+      });
+      const payload = await response.json().catch(() => null);
+      if (!response.ok) throw new Error(payload?.error || `분석 요청 실패 (${response.status})`);
+      setAnalysisResult(payload?.result || '분석 결과가 비어 있습니다.');
+    } catch (e) {
+      setAnalysisError(e.message || '분석 중 오류가 발생했습니다.');
+    } finally {
+      setAnalysisLoading(false);
+    }
+  };
+
   // ─── Render ──────────────────────────────────────────
   return (
     <div className="chart-column">
@@ -977,6 +1068,14 @@ export default function ChartColumn({ id, defaultSymbol, defaultName }) {
             </div>
           </div>
           <div className="period-group">
+            <button
+              type="button"
+              className="analysis-btn"
+              onClick={handleAnalyze}
+              disabled={analysisLoading || !chartsReady}
+            >
+              {analysisLoading ? '분석중' : '분석'}
+            </button>
             <label className="tf-label" htmlFor={`period-${id}`}>기간</label>
             <input id={`period-${id}`} className="period-input"
               type="number" min="10" max="2000"
@@ -1012,7 +1111,7 @@ export default function ChartColumn({ id, defaultSymbol, defaultName }) {
 
       {/* 차트 영역 */}
       <div className="charts-area">
-        <div className="chart-section" style={{ position: 'relative' }}>
+        <div ref={priceSectionRef} className="chart-section" style={{ position: 'relative' }}>
           <div className="chart-label">캔들차트</div>
           <div ref={priceRef} />
           {/* ③ MACD 배경 캔버스는 priceRef 안에 동적 삽입 */}
@@ -1020,12 +1119,12 @@ export default function ChartColumn({ id, defaultSymbol, defaultName }) {
           <div ref={tooltipRef} className="price-tooltip" />
         </div>
 
-        <div className="chart-section">
+        <div ref={volumeSectionRef} className="chart-section">
           <div className="chart-label">거래량</div>
           <div ref={volumeRef} />
         </div>
 
-        <div className="chart-section">
+        <div ref={macdSectionRef} className="chart-section">
           <div className="chart-label">MACD (12, 26, 9)</div>
           <div ref={macdRef} />
         </div>
@@ -1081,11 +1180,32 @@ export default function ChartColumn({ id, defaultSymbol, defaultName }) {
           ))}
         </div>
 
-        <div className="chart-section last">
+        <div ref={ichiSectionRef} className="chart-section last">
           <div className="chart-label">일목균형표</div>
           <div ref={ichiRef} />
         </div>
       </div>
+
+      {analysisOpen && (
+        <div className="analysis-modal-backdrop" role="presentation">
+          <div className="analysis-modal" role="dialog" aria-modal="true" aria-labelledby={`analysis-title-${id}`}>
+            <div className="analysis-modal-header">
+              <div>
+                <h2 id={`analysis-title-${id}`}>GPT 차트 분석</h2>
+                <p>{symbolName || symbol} · {mainTf.label} · 기간 {limit}</p>
+              </div>
+              <button type="button" className="analysis-close-btn" onClick={() => setAnalysisOpen(false)}>
+                닫기
+              </button>
+            </div>
+            <div className="analysis-modal-body">
+              {analysisLoading && <div className="analysis-loading">차트 이미지를 분석하고 있습니다...</div>}
+              {analysisError && <div className="analysis-error">{analysisError}</div>}
+              {analysisResult && <pre className="analysis-result">{analysisResult}</pre>}
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   );
 }

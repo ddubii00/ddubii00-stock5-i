@@ -184,6 +184,24 @@ html, body {
 }
 .period-input:focus { border-color: var(--accent); }
 
+.analysis-btn {
+  border: 1px solid var(--accent);
+  border-radius: 4px;
+  background: var(--accent);
+  color: #fff;
+  cursor: pointer;
+  font-family: inherit;
+  font-size: 12px;
+  font-weight: 700;
+  min-width: 52px;
+  padding: 3px 9px;
+}
+.analysis-btn:hover { background: #1558ba; border-color: #1558ba; }
+.analysis-btn:disabled {
+  cursor: wait;
+  opacity: .62;
+}
+
 /* ── MA LEGEND ── */
 .ma-legend {
   display: flex;
@@ -388,6 +406,89 @@ html, body {
   font-weight: 500;
 }
 .tt-ma b { font-weight: 600; }
+
+.analysis-modal-backdrop {
+  position: fixed;
+  inset: 0;
+  z-index: 2000;
+  background: rgba(15, 23, 42, .38);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 20px;
+}
+
+.analysis-modal {
+  width: min(920px, 94vw);
+  max-height: min(760px, 88vh);
+  display: flex;
+  flex-direction: column;
+  background: #fff;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  box-shadow: 0 22px 70px rgba(15, 23, 42, .28);
+  overflow: hidden;
+}
+
+.analysis-modal-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 14px;
+  padding: 14px 16px;
+  border-bottom: 1px solid var(--border);
+  background: var(--panel2);
+}
+.analysis-modal-header h2 {
+  font-size: 16px;
+  line-height: 1.25;
+  margin: 0;
+}
+.analysis-modal-header p {
+  color: var(--muted);
+  font-size: 12px;
+  margin-top: 3px;
+}
+
+.analysis-close-btn {
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  background: #fff;
+  color: var(--text);
+  cursor: pointer;
+  font-family: inherit;
+  font-size: 12px;
+  font-weight: 700;
+  padding: 6px 10px;
+  white-space: nowrap;
+}
+.analysis-close-btn:hover { border-color: var(--accent); color: var(--accent); }
+
+.analysis-modal-body {
+  overflow: auto;
+  padding: 16px;
+}
+.analysis-loading {
+  color: var(--muted);
+  font-size: 13px;
+  padding: 16px 0;
+}
+.analysis-error {
+  color: #dc2626;
+  background: #fef2f2;
+  border: 1px solid #fecaca;
+  border-radius: 6px;
+  font-size: 13px;
+  padding: 10px 12px;
+}
+.analysis-result {
+  color: #111827;
+  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  font-size: 12px;
+  line-height: 1.6;
+  white-space: pre-wrap;
+  word-break: break-word;
+}
 
 /* ── SCROLLBAR ── */
 ::-webkit-scrollbar { width: 5px; height: 5px; }
