@@ -279,12 +279,83 @@ function barSeconds(interval) {
   }[interval] || 86400;
 }
 
-function projectTime(time, interval, bars) {
-  if (typeof time === 'number') return time + barSeconds(interval) * bars;
+function dateStringFromUtcDate(date) {
+  return date.toISOString().slice(0, 10);
+}
+
+function nextWeekdayDateString(time) {
   const base = String(time || '').includes('T') ? new Date(time) : new Date(`${time}T00:00:00Z`);
   if (Number.isNaN(base.getTime())) return time;
-  const projected = new Date(base.getTime() + barSeconds(interval) * bars * 1000);
-  return projected.toISOString().slice(0, 10);
+
+  const next = new Date(base);
+  do {
+    next.setUTCDate(next.getUTCDate() + 1);
+  } while (next.getUTCDay() === 0 || next.getUTCDay() === 6);
+
+  return dateStringFromUtcDate(next);
+}
+
+function nextProjectedTime(time, interval, symbol) {
+  if (typeof time === 'number') {
+    const next = time + barSeconds(interval);
+    if (!isKoreanSymbol(symbol) || !isIntradayTf({ interval })) return next;
+
+    const parts = new Intl.DateTimeFormat('en-US', {
+      timeZone: 'Asia/Seoul',
+      year: 'numeric',
+      month: '2-digit',
+      day: '2-digit',
+      hour: '2-digit',
+      minute: '2-digit',
+      hour12: false,
+    }).formatToParts(new Date(next * 1000));
+    const year = Number(parts.find(p => p.type === 'year')?.value);
+    const month = Number(parts.find(p => p.type === 'month')?.value);
+    const day = Number(parts.find(p => p.type === 'day')?.value);
+    const hour = Number(parts.find(p => p.type === 'hour')?.value);
+    const minute = Number(parts.find(p => p.type === 'minute')?.value);
+    const minuteOfDay = hour * 60 + minute;
+    const auctionStart = 15 * 60 + 21;
+    const auctionEnd = 15 * 60 + 29;
+    const close = 15 * 60 + 30;
+
+    if (minuteOfDay >= auctionStart && minuteOfDay <= auctionEnd) {
+      return Math.floor(Date.UTC(year, month - 1, day, 6, 30) / 1000);
+    }
+    if (minuteOfDay > close) {
+      const nextDay = new Date(Date.UTC(year, month - 1, day + 1, 0, 0));
+      while (nextDay.getUTCDay() === 0 || nextDay.getUTCDay() === 6) {
+        nextDay.setUTCDate(nextDay.getUTCDate() + 1);
+      }
+      return Math.floor(Date.UTC(nextDay.getUTCFullYear(), nextDay.getUTCMonth(), nextDay.getUTCDate(), 0, 0) / 1000);
+    }
+    return next;
+  }
+
+  const base = String(time || '').includes('T') ? new Date(time) : new Date(`${time}T00:00:00Z`);
+  if (Number.isNaN(base.getTime())) return time;
+  if (interval === 'day') return nextWeekdayDateString(time);
+  if (interval === 'week') {
+    const next = new Date(base);
+    next.setUTCDate(next.getUTCDate() + 7);
+    return dateStringFromUtcDate(next);
+  }
+  if (interval === 'month') {
+    const next = new Date(base);
+    next.setUTCMonth(next.getUTCMonth() + 1);
+    return dateStringFromUtcDate(next);
+  }
+  const next = new Date(base.getTime() + barSeconds(interval) * 1000);
+  return dateStringFromUtcDate(next);
+}
+
+function buildProjectedTimes(candles, tf, symbol, extraBars) {
+  const times = candles.map(candle => candle.time);
+  const targetLength = candles.length + extraBars + 2;
+  while (times.length < targetLength && times.length > 0) {
+    times.push(nextProjectedTime(times[times.length - 1], tf.interval, symbol));
+  }
+  return times;
 }
 
 function ichimokuSpanBValue(candles, idx, period = 52) {
@@ -336,6 +407,155 @@ function safeLineData(arr) {
   return arr.filter(d => d != null && Number.isFinite(d.value));
 }
 
+function renderInlineMarkdown(text, keyPrefix) {
+  const parts = String(text || '').split(/(\*\*[^*]+?\*\*|\*[^*\n]+?\*)/g);
+  return parts.map((part, index) => {
+    const key = `${keyPrefix}-${index}`;
+    if (part.startsWith('**') && part.endsWith('**')) {
+      return <strong key={key}>{part.slice(2, -2)}</strong>;
+    }
+    if (part.startsWith('*') && part.endsWith('*')) {
+      return <em key={key}>{part.slice(1, -1)}</em>;
+    }
+    return <span key={key}>{part}</span>;
+  });
+}
+
+function isMarkdownTableSeparator(line) {
+  const cells = line.trim().replace(/^\||\|$/g, '').split('|').map(cell => cell.trim());
+  return cells.length > 0 && cells.every(cell => /^:?-{3,}:?$/.test(cell));
+}
+
+function splitMarkdownTableRow(line) {
+  return line.trim().replace(/^\||\|$/g, '').split('|').map(cell => cell.trim());
+}
+
+function renderMarkdownTable(lines, key) {
+  const hasHeader = lines.length > 1 && isMarkdownTableSeparator(lines[1]);
+  const header = hasHeader ? splitMarkdownTableRow(lines[0]) : null;
+  const bodyLines = hasHeader ? lines.slice(2) : lines;
+
+  return (
+    <div className="md-table-wrap" key={key}>
+      <table className="md-table">
+        {header && (
+          <thead>
+            <tr>
+              {header.map((cell, index) => (
+                <th key={`${key}-h-${index}`}>{renderInlineMarkdown(cell, `${key}-h-${index}`)}</th>
+              ))}
+            </tr>
+          </thead>
+        )}
+        <tbody>
+          {bodyLines.map((line, rowIndex) => (
+            <tr key={`${key}-r-${rowIndex}`}>
+              {splitMarkdownTableRow(line).map((cell, cellIndex) => (
+                <td key={`${key}-r-${rowIndex}-${cellIndex}`}>{renderInlineMarkdown(cell, `${key}-r-${rowIndex}-${cellIndex}`)}</td>
+              ))}
+            </tr>
+          ))}
+        </tbody>
+      </table>
+    </div>
+  );
+}
+
+function renderMarkdown(text) {
+  const lines = String(text || '').split(/\r?\n/);
+  const nodes = [];
+  let i = 0;
+
+  while (i < lines.length) {
+    const line = lines[i];
+    const trimmed = line.trim();
+    const key = `md-${i}-${nodes.length}`;
+
+    if (!trimmed) {
+      nodes.push(<div className="md-spacer" key={key} />);
+      i += 1;
+      continue;
+    }
+
+    if (trimmed.startsWith('```')) {
+      const codeLines = [];
+      i += 1;
+      while (i < lines.length && !lines[i].trim().startsWith('```')) {
+        codeLines.push(lines[i]);
+        i += 1;
+      }
+      nodes.push(<pre className="md-code" key={key}>{codeLines.join('\n')}</pre>);
+      i += i < lines.length ? 1 : 0;
+      continue;
+    }
+
+    if (trimmed.includes('|')) {
+      const tableLines = [];
+      while (i < lines.length && lines[i].trim().includes('|')) {
+        tableLines.push(lines[i]);
+        i += 1;
+      }
+      nodes.push(renderMarkdownTable(tableLines, key));
+      continue;
+    }
+
+    const heading = trimmed.match(/^(#{1,3})\s+(.+)$/);
+    if (heading) {
+      const level = heading[1].length;
+      const HeadingTag = `h${level + 1}`;
+      nodes.push(<HeadingTag className={`md-heading md-h${level}`} key={key}>{renderInlineMarkdown(heading[2], key)}</HeadingTag>);
+      i += 1;
+      continue;
+    }
+
+    if (/^[-*]\s+/.test(trimmed)) {
+      const items = [];
+      while (i < lines.length && /^[-*]\s+/.test(lines[i].trim())) {
+        items.push(lines[i].trim().replace(/^[-*]\s+/, ''));
+        i += 1;
+      }
+      nodes.push(
+        <ul className="md-list" key={key}>
+          {items.map((item, index) => <li key={`${key}-li-${index}`}>{renderInlineMarkdown(item, `${key}-li-${index}`)}</li>)}
+        </ul>
+      );
+      continue;
+    }
+
+    if (/^\d+[.)]\s+/.test(trimmed)) {
+      const items = [];
+      while (i < lines.length && /^\d+[.)]\s+/.test(lines[i].trim())) {
+        items.push(lines[i].trim().replace(/^\d+[.)]\s+/, ''));
+        i += 1;
+      }
+      nodes.push(
+        <ol className="md-list" key={key}>
+          {items.map((item, index) => <li key={`${key}-li-${index}`}>{renderInlineMarkdown(item, `${key}-li-${index}`)}</li>)}
+        </ol>
+      );
+      continue;
+    }
+
+    const paragraph = [trimmed];
+    i += 1;
+    while (
+      i < lines.length &&
+      lines[i].trim() &&
+      !/^(#{1,3})\s+/.test(lines[i].trim()) &&
+      !/^[-*]\s+/.test(lines[i].trim()) &&
+      !/^\d+[.)]\s+/.test(lines[i].trim()) &&
+      !lines[i].trim().includes('|') &&
+      !lines[i].trim().startsWith('```')
+    ) {
+      paragraph.push(lines[i].trim());
+      i += 1;
+    }
+    nodes.push(<p className="md-p" key={key}>{renderInlineMarkdown(paragraph.join(' '), key)}</p>);
+  }
+
+  return nodes;
+}
+
 const BASE_OPTS = {
   layout: {
     background: { type: 'solid', color: '#f7f9fc' },
@@ -374,6 +594,7 @@ export default function ChartColumn({ id, defaultSymbol, defaultName }) {
   const [analysisLoading, setAnalysisLoading] = useState(false);
   const [analysisError, setAnalysisError] = useState('');
   const [analysisResult, setAnalysisResult] = useState('');
+  const [analysisFontSize, setAnalysisFontSize] = useState(15);
   const [copyStatus, setCopyStatus] = useState('');
   const [chartsReady, setChartsReady] = useState(false);
   const [loadVersion, setLoadVersion] = useState(0);
@@ -949,16 +1170,18 @@ export default function ChartColumn({ id, defaultSymbol, defaultName }) {
     ser.current.ichiCandle.setData(candles);
     const ichi = calculateIchimoku(candles);
     const visibleCount = Math.min(Math.max(Number(lim) || ichiLimit, 1), candles.length);
+    const projectedTimes = buildProjectedTimes(candles, tf, sym, ICHIMOKU_DISPLACEMENT + 2);
+    const projectedTimeAt = (idx, bars = ICHIMOKU_DISPLACEMENT) => projectedTimes[idx + bars] ?? null;
 
     const spanAData = ichi
       .map((d, i) => d.tenkan != null && d.kijun != null ? ({
-        time: projectTime(candles[i]?.time, tf.interval, ICHIMOKU_DISPLACEMENT),
+        time: projectedTimeAt(i),
         value: (d.tenkan + d.kijun) / 2,
       }) : null)
       .filter(d => d?.time != null);
     const spanBData = candles
       .map((d, i) => ({
-        time: projectTime(d.time, tf.interval, ICHIMOKU_DISPLACEMENT),
+        time: projectedTimeAt(i),
         value: ichimokuSpanBValue(candles, i),
       }))
       .filter(d => d?.time != null);
@@ -973,7 +1196,7 @@ export default function ChartColumn({ id, defaultSymbol, defaultName }) {
       if (ichiViewKeyRef.current !== viewKey) {
         try {
           const fromTime = candles[Math.max(0, candles.length - visibleCount)]?.time;
-          const toTime = projectTime(candles[candles.length - 1]?.time, tf.interval, ICHIMOKU_DISPLACEMENT + 1);
+          const toTime = projectedTimes[candles.length - 1 + ICHIMOKU_DISPLACEMENT + 1];
           charts.current.ichi?.timeScale().setVisibleRange({
             from: fromTime,
             to: toTime,
@@ -1279,14 +1502,39 @@ export default function ChartColumn({ id, defaultSymbol, defaultName }) {
                 <h2 id={`analysis-title-${id}`}>Gemini 차트 분석</h2>
                 <p>{symbolName || symbol} · {mainTf.label} · 기간 {limit}</p>
               </div>
-              <button type="button" className="analysis-close-btn" onClick={() => setAnalysisOpen(false)}>
-                닫기
-              </button>
+              <div className="analysis-modal-actions">
+                <div className="analysis-font-controls" aria-label="분석 결과 글자 크기 조절">
+                  <button
+                    type="button"
+                    className="analysis-font-btn"
+                    onClick={() => setAnalysisFontSize(size => Math.max(11, size - 1))}
+                    aria-label="글자 작게"
+                  >
+                    -
+                  </button>
+                  <span>{analysisFontSize}px</span>
+                  <button
+                    type="button"
+                    className="analysis-font-btn"
+                    onClick={() => setAnalysisFontSize(size => Math.min(24, size + 1))}
+                    aria-label="글자 크게"
+                  >
+                    +
+                  </button>
+                </div>
+                <button type="button" className="analysis-close-btn" onClick={() => setAnalysisOpen(false)}>
+                  닫기
+                </button>
+              </div>
             </div>
             <div className="analysis-modal-body">
               {analysisLoading && <div className="analysis-loading">차트 이미지를 분석하고 있습니다...</div>}
               {analysisError && <div className="analysis-error">{analysisError}</div>}
-              {analysisResult && <pre className="analysis-result">{analysisResult}</pre>}
+              {analysisResult && (
+                <div className="analysis-result" style={{ '--analysis-font-size': `${analysisFontSize}px` }}>
+                  {renderMarkdown(analysisResult)}
+                </div>
+              )}
             </div>
           </div>
         </div>

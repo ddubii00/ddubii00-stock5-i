@@ -474,6 +474,39 @@ html, body {
   margin-top: 3px;
 }
 
+.analysis-modal-actions {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.analysis-font-controls {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  color: var(--muted);
+  font-size: 12px;
+  white-space: nowrap;
+}
+
+.analysis-font-btn {
+  width: 28px;
+  height: 28px;
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  background: #fff;
+  color: var(--text);
+  cursor: pointer;
+  font-family: inherit;
+  font-size: 15px;
+  font-weight: 800;
+  line-height: 1;
+}
+.analysis-font-btn:hover {
+  border-color: var(--accent);
+  color: var(--accent);
+}
+
 .analysis-close-btn {
   border: 1px solid var(--border);
   border-radius: 4px;
@@ -510,13 +543,78 @@ html, body {
 }
 .analysis-result {
   color: #111827;
-  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
-  font-size: 12px;
-  line-height: 1.6;
+  font-family: "Noto Sans KR", Pretendard, "Apple SD Gothic Neo", sans-serif;
+  font-size: var(--analysis-font-size, 15px);
+  line-height: 1.68;
   margin: 0;
   padding-bottom: 24px;
-  white-space: pre-wrap;
   word-break: break-word;
+}
+
+.analysis-result strong { font-weight: 800; }
+.analysis-result em { font-style: italic; }
+
+.md-heading {
+  color: #0f172a;
+  font-weight: 800;
+  line-height: 1.28;
+  margin: 18px 0 9px;
+}
+.md-h1 { font-size: calc(var(--analysis-font-size, 15px) + 7px); }
+.md-h2 { font-size: calc(var(--analysis-font-size, 15px) + 5px); }
+.md-h3 { font-size: calc(var(--analysis-font-size, 15px) + 3px); }
+.md-p {
+  margin: 7px 0;
+}
+.md-spacer {
+  height: 8px;
+}
+.md-list {
+  margin: 7px 0 10px 20px;
+  padding: 0;
+}
+.md-list li {
+  margin: 4px 0;
+}
+.md-table-wrap {
+  overflow-x: auto;
+  margin: 11px 0 14px;
+  border: 1px solid #e5e7eb;
+  border-radius: 7px;
+}
+.md-table {
+  width: 100%;
+  border-collapse: collapse;
+  min-width: 620px;
+  background: #fff;
+}
+.md-table th,
+.md-table td {
+  border-bottom: 1px solid #e5e7eb;
+  border-right: 1px solid #eef2f7;
+  padding: 8px 10px;
+  text-align: left;
+  vertical-align: top;
+}
+.md-table th {
+  background: #f8fafc;
+  color: #334155;
+  font-weight: 800;
+}
+.md-table tr:last-child td {
+  border-bottom: 0;
+}
+.md-code {
+  overflow-x: auto;
+  margin: 10px 0 14px;
+  padding: 11px 12px;
+  border-radius: 7px;
+  background: #0f172a;
+  color: #e5e7eb;
+  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  font-size: calc(var(--analysis-font-size, 15px) - 2px);
+  line-height: 1.55;
+  white-space: pre;
 }
 
 /* ── SCROLLBAR ── */

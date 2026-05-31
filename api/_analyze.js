@@ -10,6 +10,12 @@ const ANALYSIS_PROMPT = `너는 주식 기술적 분석 전문가다.
 
 분석 목적은 단순한 매수/매도 추천이 아니라, 현재 종목의 기술적 상태를 객관적으로 분류하고 매매 시나리오를 만드는 것이다.
 
+가장 먼저 아래 형식의 "5줄 요약"을 작성하라.
+- 요약은 정확히 5개 bullet로 작성한다.
+- 첫 줄에는 5점 만점 종합 점수를 반드시 포함한다. 예: "종합 점수: 3.5/5"
+- 나머지 4줄에는 추세, 거래량, MACD, 일목균형표 핵심 판단을 각각 한 줄씩 요약한다.
+- 그 다음에 상세 분석을 이어서 작성한다.
+
 다음 기준으로 분석하라.
 
 [1] 전체 시장 상태
@@ -109,7 +115,7 @@ function getGeminiModel() {
 
 function getGeminiMaxOutputTokens() {
   const value = Number(process.env.GEMINI_MAX_OUTPUT_TOKENS);
-  return Number.isFinite(value) && value > 0 ? value : 12000;
+  return Number.isFinite(value) && value > 0 ? value : 30000;
 }
 
 function extractGeminiText(payload) {
@@ -120,6 +126,39 @@ function extractGeminiText(payload) {
     .join('\n')
     .trim();
   return text || '';
+}
+
+function isTruncated(payload) {
+  const reason = payload?.candidates?.[0]?.finishReason;
+  return reason === 'MAX_TOKENS' || reason === 'LENGTH';
+}
+
+async function requestGemini({ apiKey, model, contents }) {
+  const response = await fetch(`https://generativelanguage.googleapis.com/v1beta/models/${encodeURIComponent(model)}:generateContent`, {
+    method: 'POST',
+    headers: {
+      'x-goog-api-key': apiKey,
+      'Content-Type': 'application/json',
+    },
+    body: JSON.stringify({
+      system_instruction: {
+        parts: [{
+          text: '사용자가 제공한 차트 이미지에 보이는 정보만 근거로 기술적 분석을 작성한다. 투자 자문처럼 단정하지 말고 조건부 시나리오로 답한다. 답변이 길어도 표와 JSON을 끝까지 완성한다.',
+        }],
+      },
+      contents,
+      generationConfig: {
+        temperature: 0.2,
+        maxOutputTokens: getGeminiMaxOutputTokens(),
+      },
+    }),
+  });
+
+  const payload = await response.json().catch(() => null);
+  if (!response.ok) {
+    throw new Error(payload?.error?.message || `Gemini API 요청 실패 (${response.status})`);
+  }
+  return payload;
 }
 
 export async function analyzeCharts({ symbol, symbolName, mainTf, limit, ichiTf, ichiLimit, images }) {
@@ -150,32 +189,29 @@ export async function analyzeCharts({ symbol, symbolName, mainTf, limit, ichiTf,
   ];
 
   const model = getGeminiModel();
-  const response = await fetch(`https://generativelanguage.googleapis.com/v1beta/models/${encodeURIComponent(model)}:generateContent`, {
-    method: 'POST',
-    headers: {
-      'x-goog-api-key': apiKey,
-      'Content-Type': 'application/json',
-    },
-    body: JSON.stringify({
-      system_instruction: {
+  const firstMessage = { role: 'user', parts };
+  let contents = [firstMessage];
+  const resultParts = [];
+
+  for (let attempt = 0; attempt < 3; attempt += 1) {
+    const payload = await requestGemini({ apiKey, model, contents });
+    const text = extractGeminiText(payload);
+    if (text) resultParts.push(text);
+    if (!isTruncated(payload)) break;
+
+    contents = [
+      firstMessage,
+      { role: 'model', parts: [{ text: resultParts.join('\n\n') }] },
+      {
+        role: 'user',
         parts: [{
-          text: '사용자가 제공한 차트 이미지에 보이는 정보만 근거로 기술적 분석을 작성한다. 투자 자문처럼 단정하지 말고 조건부 시나리오로 답한다.',
+          text: '분석 결과가 출력 제한으로 중간에 끊겼다. 앞 내용은 반복하지 말고 바로 이어서 남은 상세 분석, 표, JSON을 끝까지 완성하라. JSON은 반드시 닫힌 완전한 형식으로 끝내라.',
         }],
       },
-      contents: [{ role: 'user', parts }],
-      generationConfig: {
-        temperature: 0.2,
-        maxOutputTokens: getGeminiMaxOutputTokens(),
-      },
-    }),
-  });
-
-  const payload = await response.json().catch(() => null);
-  if (!response.ok) {
-    throw new Error(payload?.error?.message || `Gemini API 요청 실패 (${response.status})`);
+    ];
   }
 
-  const result = extractGeminiText(payload);
+  const result = resultParts.join('\n\n').trim();
   if (!result) throw new Error('Gemini API 응답에서 분석 결과를 찾을 수 없습니다.');
   return result;
 }
