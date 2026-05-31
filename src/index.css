@@ -430,6 +430,33 @@ html, body {
 }
 .tt-ma b { font-weight: 600; }
 
+.ichi-tooltip {
+  display: none;
+  position: absolute;
+  z-index: 120;
+  pointer-events: none;
+  grid-template-columns: 1fr 1fr;
+  gap: 2px 6px;
+  width: 144px;
+  padding: 4px 6px;
+  border: 1px solid rgba(203, 213, 225, .78);
+  border-radius: 5px;
+  background: rgba(255, 255, 255, .72);
+  box-shadow: 0 4px 12px rgba(15, 23, 42, .12);
+  backdrop-filter: blur(2px);
+  font-size: 10px;
+  line-height: 1.12;
+}
+
+.ichi-tt-item {
+  min-width: 0;
+  white-space: nowrap;
+}
+
+.ichi-tt-item b {
+  font-weight: 700;
+}
+
 .analysis-modal-backdrop {
   position: fixed;
   inset: 0;

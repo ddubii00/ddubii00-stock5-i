@@ -62,12 +62,16 @@ function isKoreanSymbol(symbol) {
   return /^\d{6}(\.(KS|KQ))?$/.test(symbol || '') || /\.(KS|KQ)$/.test(symbol || '');
 }
 
+function isKoreanMarketSymbol(symbol) {
+  return isKoreanSymbol(symbol) || symbol === '^KS11' || symbol === '^KQ11';
+}
+
 function isIndexSymbol(symbol) {
   return String(symbol || '').startsWith('^');
 }
 
 function symbolTimeZone(symbol) {
-  return isKoreanSymbol(symbol) ? 'Asia/Seoul' : 'America/New_York';
+  return isKoreanMarketSymbol(symbol) ? 'Asia/Seoul' : 'America/New_York';
 }
 
 function formatNumberNoDecimals(value) {
@@ -283,14 +287,108 @@ function dateStringFromUtcDate(date) {
   return date.toISOString().slice(0, 10);
 }
 
-function nextWeekdayDateString(time) {
+function addUtcDays(date, days) {
+  const next = new Date(date);
+  next.setUTCDate(next.getUTCDate() + days);
+  return next;
+}
+
+function observedFixedHoliday(year, monthIndex, day) {
+  const date = new Date(Date.UTC(year, monthIndex, day));
+  const weekDay = date.getUTCDay();
+  if (weekDay === 0) date.setUTCDate(date.getUTCDate() + 1);
+  if (weekDay === 6) date.setUTCDate(date.getUTCDate() - 1);
+  return dateStringFromUtcDate(date);
+}
+
+function nthWeekdayOfMonth(year, monthIndex, weekday, nth) {
+  const date = new Date(Date.UTC(year, monthIndex, 1));
+  while (date.getUTCDay() !== weekday) date.setUTCDate(date.getUTCDate() + 1);
+  date.setUTCDate(date.getUTCDate() + (nth - 1) * 7);
+  return dateStringFromUtcDate(date);
+}
+
+function lastWeekdayOfMonth(year, monthIndex, weekday) {
+  const date = new Date(Date.UTC(year, monthIndex + 1, 0));
+  while (date.getUTCDay() !== weekday) date.setUTCDate(date.getUTCDate() - 1);
+  return dateStringFromUtcDate(date);
+}
+
+function easterDate(year) {
+  const a = year % 19;
+  const b = Math.floor(year / 100);
+  const c = year % 100;
+  const d = Math.floor(b / 4);
+  const e = b % 4;
+  const f = Math.floor((b + 8) / 25);
+  const g = Math.floor((b - f + 1) / 3);
+  const h = (19 * a + b - d - g + 15) % 30;
+  const i = Math.floor(c / 4);
+  const k = c % 4;
+  const l = (32 + 2 * e + 2 * i - h - k) % 7;
+  const m = Math.floor((a + 11 * h + 22 * l) / 451);
+  const month = Math.floor((h + l - 7 * m + 114) / 31) - 1;
+  const day = ((h + l - 7 * m + 114) % 31) + 1;
+  return new Date(Date.UTC(year, month, day));
+}
+
+function marketHolidaySet(year, symbol) {
+  const holidays = new Set();
+  const korean = isKoreanMarketSymbol(symbol);
+  if (korean) {
+    [
+      `${year}-01-01`, `${year}-03-01`, `${year}-05-05`, `${year}-06-06`,
+      `${year}-08-15`, `${year}-10-03`, `${year}-10-09`, `${year}-12-25`,
+      '2026-02-16', '2026-02-17', '2026-02-18',
+      '2026-03-02',
+      '2026-05-25',
+      '2026-08-17',
+      '2026-09-24', '2026-09-25', '2026-09-28',
+      '2026-10-05',
+    ].forEach(date => holidays.add(date));
+    return holidays;
+  }
+
+  const goodFriday = dateStringFromUtcDate(addUtcDays(easterDate(year), -2));
+  [
+    observedFixedHoliday(year, 0, 1),
+    nthWeekdayOfMonth(year, 0, 1, 3),
+    nthWeekdayOfMonth(year, 1, 1, 3),
+    goodFriday,
+    lastWeekdayOfMonth(year, 4, 1),
+    observedFixedHoliday(year, 5, 19),
+    observedFixedHoliday(year, 6, 4),
+    nthWeekdayOfMonth(year, 8, 1, 1),
+    nthWeekdayOfMonth(year, 10, 4, 4),
+    observedFixedHoliday(year, 11, 25),
+  ].forEach(date => holidays.add(date));
+  return holidays;
+}
+
+function isClosedDailyDate(dateString, symbol) {
+  const date = new Date(`${dateString}T00:00:00Z`);
+  if (Number.isNaN(date.getTime())) return false;
+  const day = date.getUTCDay();
+  if (day === 0 || day === 6) return true;
+  return marketHolidaySet(date.getUTCFullYear(), symbol).has(dateString);
+}
+
+function filterDailyTradingCandles(candles, symbol, tf) {
+  if (tf?.interval !== 'day') return candles;
+  return candles.filter(candle => {
+    const date = typeof candle.time === 'string' ? candle.time.slice(0, 10) : null;
+    return date ? !isClosedDailyDate(date, symbol) : true;
+  });
+}
+
+function nextTradingDateString(time, symbol) {
   const base = String(time || '').includes('T') ? new Date(time) : new Date(`${time}T00:00:00Z`);
   if (Number.isNaN(base.getTime())) return time;
 
   const next = new Date(base);
   do {
     next.setUTCDate(next.getUTCDate() + 1);
-  } while (next.getUTCDay() === 0 || next.getUTCDay() === 6);
+  } while (isClosedDailyDate(dateStringFromUtcDate(next), symbol));
 
   return dateStringFromUtcDate(next);
 }
@@ -298,7 +396,7 @@ function nextWeekdayDateString(time) {
 function nextProjectedTime(time, interval, symbol) {
   if (typeof time === 'number') {
     const next = time + barSeconds(interval);
-    if (!isKoreanSymbol(symbol) || !isIntradayTf({ interval })) return next;
+    if (!isKoreanMarketSymbol(symbol) || !isIntradayTf({ interval })) return next;
 
     const parts = new Intl.DateTimeFormat('en-US', {
       timeZone: 'Asia/Seoul',
@@ -324,7 +422,7 @@ function nextProjectedTime(time, interval, symbol) {
     }
     if (minuteOfDay > close) {
       const nextDay = new Date(Date.UTC(year, month - 1, day + 1, 0, 0));
-      while (nextDay.getUTCDay() === 0 || nextDay.getUTCDay() === 6) {
+      while (isClosedDailyDate(dateStringFromUtcDate(nextDay), symbol)) {
         nextDay.setUTCDate(nextDay.getUTCDate() + 1);
       }
       return Math.floor(Date.UTC(nextDay.getUTCFullYear(), nextDay.getUTCMonth(), nextDay.getUTCDate(), 0, 0) / 1000);
@@ -334,7 +432,7 @@ function nextProjectedTime(time, interval, symbol) {
 
   const base = String(time || '').includes('T') ? new Date(time) : new Date(`${time}T00:00:00Z`);
   if (Number.isNaN(base.getTime())) return time;
-  if (interval === 'day') return nextWeekdayDateString(time);
+  if (interval === 'day') return nextTradingDateString(time, symbol);
   if (interval === 'week') {
     const next = new Date(base);
     next.setUTCDate(next.getUTCDate() + 7);
@@ -405,6 +503,12 @@ function normalizeCandleData(arr) {
 }
 function safeLineData(arr) {
   return arr.filter(d => d != null && Number.isFinite(d.value));
+}
+
+function buildValueMap(arr) {
+  return new Map((arr || [])
+    .filter(d => d?.time != null && Number.isFinite(d.value))
+    .map(d => [timeKey(d.time), d.value]));
 }
 
 function renderInlineMarkdown(text, keyPrefix) {
@@ -625,6 +729,7 @@ export default function ChartColumn({ id, defaultSymbol, defaultName }) {
   const macdRef    = useRef(null);
   const ichiRef    = useRef(null);
   const tooltipRef = useRef(null);
+  const ichiTooltipRef = useRef(null);
   const bgCanvasRef= useRef(null);  // ③ MACD 배경색 캔버스
 
   // Runtime refs
@@ -633,6 +738,14 @@ export default function ChartColumn({ id, defaultSymbol, defaultName }) {
   const maMaps      = useRef([]);
   const macdDataRef = useRef([]);   // ③ MACD 데이터 저장
   const crosshairValueMapsRef = useRef({ candle: new Map(), volume: new Map(), macd: new Map() });
+  const ichiValueMapsRef = useRef({
+    candle: new Map(),
+    kijun: new Map(),
+    tenkan: new Map(),
+    chikou: new Map(),
+    spanA: new Map(),
+    spanB: new Map(),
+  });
   const symbolRef   = useRef(symbol);
   const timeZoneRef = useRef(symbolTimeZone(symbol));
   const mainViewKeyRef = useRef('');
@@ -943,6 +1056,49 @@ export default function ChartColumn({ id, defaultSymbol, defaultName }) {
       });
     });
 
+    ic.subscribeCrosshairMove((param) => {
+      const tip = ichiTooltipRef.current;
+      if (!tip) return;
+      if (!param.point || !param.time) {
+        tip.style.display = 'none';
+        return;
+      }
+
+      const tk = timeKey(param.time);
+      const maps = ichiValueMapsRef.current;
+      const candle = maps.candle.get(tk);
+      const rows = [];
+      const addRow = (label, value, color = '#334155') => {
+        if (Number.isFinite(value)) {
+          rows.push(`<span class="ichi-tt-item" style="color:${color}">${label} <b>${formatPriceLabel(value, symbolRef.current)}</b></span>`);
+        }
+      };
+
+      if (candle) {
+        addRow('시가', candle.open, candle.close >= candle.open ? '#dc2626' : '#1565c0');
+        addRow('종가', candle.close, candle.close >= candle.open ? '#dc2626' : '#1565c0');
+      }
+      addRow('기준선', maps.kijun.get(tk), '#1565c0');
+      addRow('전환선', maps.tenkan.get(tk), '#e53935');
+      addRow('후행선', maps.chikou.get(tk), '#9c27b0');
+      addRow('선행1', maps.spanA.get(tk), '#43a047');
+      addRow('선행2', maps.spanB.get(tk), '#e53935');
+
+      if (!rows.length) {
+        tip.style.display = 'none';
+        return;
+      }
+
+      tip.innerHTML = rows.join('');
+      const cw = ichiRef.current?.clientWidth || 400;
+      let lx = param.point.x - 154;
+      if (lx < 4) lx = param.point.x + 10;
+      if (lx + 148 > cw) lx = Math.max(4, cw - 148);
+      tip.style.left = `${lx}px`;
+      tip.style.top = `${Math.max(4, param.point.y - 36)}px`;
+      tip.style.display = 'grid';
+    });
+
     // 리사이즈
     const onResize = () => {
       [[pc, priceRef], [vc, volumeRef], [mc, macdRef], [ic, ichiRef]].forEach(([chart, ref]) => {
@@ -959,6 +1115,14 @@ export default function ChartColumn({ id, defaultSymbol, defaultName }) {
       charts.current = {};
       ser.current = {};
       maMaps.current = [];
+      ichiValueMapsRef.current = {
+        candle: new Map(),
+        kijun: new Map(),
+        tenkan: new Map(),
+        chikou: new Map(),
+        spanA: new Map(),
+        spanB: new Map(),
+      };
     };
   }, [drawMacdBackground]);
 
@@ -1162,16 +1326,31 @@ export default function ChartColumn({ id, defaultSymbol, defaultName }) {
       ser.current.chikou.setData([]);
       ser.current.spanA.setData([]);
       ser.current.spanB.setData([]);
+      ichiValueMapsRef.current = {
+        candle: new Map(),
+        kijun: new Map(),
+        tenkan: new Map(),
+        chikou: new Map(),
+        spanA: new Map(),
+        spanB: new Map(),
+      };
       return;
     }
 
-    const candles = filterKoreanRegularIntraday(normalizeCandleData(data), sym, tf);
+    const candles = filterDailyTradingCandles(
+      filterKoreanRegularIntraday(normalizeCandleData(data), sym, tf),
+      sym,
+      tf
+    );
     if (!candles.length) throw new Error('일목균형표 데이터가 비어 있습니다.');
-    ser.current.ichiCandle.setData(candles);
     const ichi = calculateIchimoku(candles);
     const visibleCount = Math.min(Math.max(Number(lim) || ichiLimit, 1), candles.length);
     const projectedTimes = buildProjectedTimes(candles, tf, sym, ICHIMOKU_DISPLACEMENT + 2);
     const projectedTimeAt = (idx, bars = ICHIMOKU_DISPLACEMENT) => projectedTimes[idx + bars] ?? null;
+    const futureWhitespace = projectedTimes
+      .slice(candles.length, candles.length + ICHIMOKU_DISPLACEMENT + 2)
+      .map(time => ({ time }));
+    ser.current.ichiCandle.setData([...candles, ...futureWhitespace]);
 
     const spanAData = ichi
       .map((d, i) => d.tenkan != null && d.kijun != null ? ({
@@ -1186,20 +1365,33 @@ export default function ChartColumn({ id, defaultSymbol, defaultName }) {
       }))
       .filter(d => d?.time != null);
 
-    ser.current.tenkan.setData(safeLineData(ichi.map((d, i) => ({ time: candles[i]?.time, value: d.tenkan })).filter(d => d.time != null)));
-    ser.current.kijun.setData( safeLineData(ichi.map((d, i) => ({ time: candles[i]?.time, value: d.kijun  })).filter(d => d.time != null)));
-    ser.current.chikou.setData(safeLineData(ichi.map((d, i) => ({ time: candles[i]?.time, value: d.chikou })).filter(d => d.time != null)));
-    ser.current.spanA.setData( safeLineData(spanAData));
-    ser.current.spanB.setData( safeLineData(spanBData));
+    const tenkanData = safeLineData(ichi.map((d, i) => ({ time: candles[i]?.time, value: d.tenkan })).filter(d => d.time != null));
+    const kijunData = safeLineData(ichi.map((d, i) => ({ time: candles[i]?.time, value: d.kijun })).filter(d => d.time != null));
+    const chikouData = safeLineData(ichi.map((d, i) => ({ time: candles[i]?.time, value: d.chikou })).filter(d => d.time != null));
+    const safeSpanAData = safeLineData(spanAData);
+    const safeSpanBData = safeLineData(spanBData);
+
+    ser.current.tenkan.setData(tenkanData);
+    ser.current.kijun.setData(kijunData);
+    ser.current.chikou.setData(chikouData);
+    ser.current.spanA.setData(safeSpanAData);
+    ser.current.spanB.setData(safeSpanBData);
+    ichiValueMapsRef.current = {
+      candle: new Map(candles.map(candle => [timeKey(candle.time), candle])),
+      kijun: buildValueMap(kijunData),
+      tenkan: buildValueMap(tenkanData),
+      chikou: buildValueMap(chikouData),
+      spanA: buildValueMap(safeSpanAData),
+      spanB: buildValueMap(safeSpanBData),
+    };
+
     const viewKey = `${sym}:${tf.interval}:${visibleCount}`;
     requestAnimationFrame(() => {
       if (ichiViewKeyRef.current !== viewKey) {
         try {
-          const fromTime = candles[Math.max(0, candles.length - visibleCount)]?.time;
-          const toTime = projectedTimes[candles.length - 1 + ICHIMOKU_DISPLACEMENT + 1];
-          charts.current.ichi?.timeScale().setVisibleRange({
-            from: fromTime,
-            to: toTime,
+          charts.current.ichi?.timeScale().setVisibleLogicalRange({
+            from: Math.max(0, candles.length - visibleCount),
+            to: candles.length - 1 + ICHIMOKU_DISPLACEMENT + 1,
           });
         } catch (e) {
           console.warn('Ichi visible range sync skipped:', e);
@@ -1488,9 +1680,10 @@ export default function ChartColumn({ id, defaultSymbol, defaultName }) {
           ))}
         </div>
 
-        <div ref={ichiSectionRef} className="chart-section last">
+        <div ref={ichiSectionRef} className="chart-section last" style={{ position: 'relative' }}>
           <div className="chart-label">일목균형표</div>
           <div ref={ichiRef} />
+          <div ref={ichiTooltipRef} className="ichi-tooltip" />
         </div>
       </div>
 
