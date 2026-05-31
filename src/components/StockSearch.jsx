@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useRef, useCallback } from 'react';
+import { useState, useEffect, useRef, useCallback } from 'react';
 
 export default function StockSearch({ onSelect, placeholder }) {
   const [query, setQuery] = useState('');
@@ -15,7 +15,10 @@ export default function StockSearch({ onSelect, placeholder }) {
       }
     };
     document.addEventListener('mousedown', handler);
-    return () => document.removeEventListener('mousedown', handler);
+    return () => {
+      document.removeEventListener('mousedown', handler);
+      clearTimeout(timerRef.current);
+    };
   }, []);
 
   const search = useCallback(async (q) => {
@@ -27,6 +30,14 @@ export default function StockSearch({ onSelect, placeholder }) {
     setLoading(true);
     try {
       const res = await fetch(`/api/search?q=${encodeURIComponent(q.trim())}`);
+      const contentType = res.headers.get('content-type') || '';
+      if (!res.ok) {
+        const body = contentType.includes('application/json') ? await res.json().catch(() => null) : await res.text();
+        throw new Error(body?.error || body || `검색 실패 (${res.status})`);
+      }
+      if (!contentType.includes('application/json')) {
+        throw new Error('서버가 JSON 대신 다른 응답을 반환했습니다.');
+      }
       const data = await res.json();
       setResults(Array.isArray(data) ? data : []);
       setOpen(true);

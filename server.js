@@ -1,3 +1,4 @@
+import process from 'node:process';
 import express from 'express';
 import cors from 'cors';
 import YahooFinance from 'yahoo-finance2';
@@ -68,11 +69,6 @@ const INDEX_MAP = {
   'HANGSENG':{ symbol:'^HSI',  name: 'Hang Seng',     exchange: 'HKEX' },
 };
 
-function findIndex(q) {
-  const upper = q.toUpperCase().replace(/\s/g, '');
-  return INDEX_MAP[upper] || null;
-}
-
 // ─── 검색 ───────────────────────────────────────────────
 app.get('/api/search', async (req, res) => {
   try {
@@ -126,7 +122,7 @@ app.get('/api/search', async (req, res) => {
 function parseNumeric(text) {
   const s = String(text || '').replace(/,/g, '').trim();
   if (!s || /^N\/?[AD]$/i.test(s)) return null;
-  const v = Number(s.replace(/[^\d.+\-]/g, ''));
+  const v = Number(s.replace(/[^\d.+-]/g, ''));
   return Number.isFinite(v) ? v : null;
 }
 

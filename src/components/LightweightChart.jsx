@@ -1,11 +1,10 @@
-import React, { useEffect, useRef, useImperativeHandle, forwardRef } from 'react';
+import { useEffect, useRef, useImperativeHandle, forwardRef } from 'react';
 import { createChart, CrosshairMode } from 'lightweight-charts';
 
 const LightweightChart = forwardRef(({
   data,
   type = 'candlestick', // 'candlestick', 'histogram', 'line', 'macd', 'ichimoku'
   height = 200,
-  colors = {},
   title = '',
   syncGroup
 }, ref) => {
@@ -118,7 +117,7 @@ const LightweightChart = forwardRef(({
       }
       chart.remove();
     };
-  }, [type, height]); // Re-create only if type or height changes
+  }, [type, height, syncGroup]);
 
   // Update data effect
   useEffect(() => {

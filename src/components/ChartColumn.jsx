@@ -1,10 +1,9 @@
-import React, { useState, useEffect, useRef, useCallback } from 'react';
+import { useState, useEffect, useRef, useCallback } from 'react';
 import {
   createChart,
   CandlestickSeries,
   HistogramSeries,
   LineSeries,
-  AreaSeries,
   CrosshairMode,
 } from 'lightweight-charts';
 import { calculateMACD, calculateIchimoku, calculateMA, buildTimeMap } from '../utils/indicators';
@@ -144,6 +143,57 @@ export default function ChartColumn({ id, defaultSymbol, defaultName }) {
     setError('');
     localStorage.setItem(storageKey, JSON.stringify({ symbol: sym, name }));
   }, [storageKey]);
+
+  // ③ MACD 배경색 캔버스에 그리기
+  const drawMacdBackground = useCallback(() => {
+    const container = priceRef.current;
+    const chart = charts.current.price;
+    const macdChart = charts.current.macd;
+    const macdData  = macdDataRef.current;
+    if (!container || !chart || !macdChart || !macdData.length) return;
+
+    if (!bgCanvasRef.current) {
+      const canvas = document.createElement('canvas');
+      canvas.style.cssText = 'position:absolute;inset:0;pointer-events:none;z-index:1;';
+      container.style.position = 'relative';
+      container.appendChild(canvas);
+      bgCanvasRef.current = canvas;
+    }
+    const canvas = bgCanvasRef.current;
+    const dpr  = window.devicePixelRatio || 1;
+    const rect  = container.getBoundingClientRect();
+    if (!rect.width) return;
+
+    canvas.width  = Math.floor(rect.width  * dpr);
+    canvas.height = Math.floor(rect.height * dpr);
+    canvas.style.width  = rect.width  + 'px';
+    canvas.style.height = rect.height + 'px';
+
+    const ctx = canvas.getContext('2d');
+    ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+    ctx.clearRect(0, 0, rect.width, rect.height);
+
+    // MACD 히스토그램의 부호에 따라 배경 칠하기
+    const ts = chart.timeScale();
+    let prevX = null, prevSign = null;
+
+    for (let i = 0; i < macdData.length; i++) {
+      const d = macdData[i];
+      if (!Number.isFinite(d.histogram)) continue;
+      const sign = d.histogram >= 0 ? 1 : -1;
+      const x = ts.timeToCoordinate(d.time);
+      if (x == null) { prevX = null; prevSign = null; continue; }
+
+      if (prevX !== null && prevSign === sign) {
+        ctx.fillStyle = sign > 0
+          ? 'rgba(239,83,80,0.08)'   // 양수: 투명 빨강
+          : 'rgba(21,101,192,0.08)'; // 음수: 투명 파랑
+        ctx.fillRect(prevX, 0, x - prevX, rect.height);
+      }
+      prevX = x;
+      prevSign = sign;
+    }
+  }, []);
 
   // ─── 차트 초기화 (once) ──────────────────────────────
   useEffect(() => {
@@ -292,7 +342,9 @@ export default function ChartColumn({ id, defaultSymbol, defaultName }) {
             } else {
               other.clearCrosshairPosition();
             }
-          } catch { /* 데이터 미로드 시 무시 */ }
+          } catch (e) {
+            console.warn('Crosshair sync skipped:', e);
+          }
         });
         xhairLock.current = false;
       });
@@ -310,70 +362,21 @@ export default function ChartColumn({ id, defaultSymbol, defaultName }) {
     return () => {
       window.removeEventListener('resize', onResize);
       inited.current = false;
-      Object.values(charts.current).forEach(c => { try { c.remove(); } catch {} });
+      Object.values(charts.current).forEach(c => { try { c.remove(); } catch (e) { console.warn('Chart remove skipped:', e); } });
       charts.current = {};
       ser.current = {};
       maMaps.current = [];
     };
-  }, []); // eslint-disable-line react-hooks/exhaustive-deps
-
-  // ③ MACD 배경색 캔버스에 그리기
-  const drawMacdBackground = useCallback(() => {
-    const container = priceRef.current;
-    const chart = charts.current.price;
-    const macdChart = charts.current.macd;
-    const macdData  = macdDataRef.current;
-    if (!container || !chart || !macdChart || !macdData.length) return;
-
-    if (!bgCanvasRef.current) {
-      const canvas = document.createElement('canvas');
-      canvas.style.cssText = 'position:absolute;inset:0;pointer-events:none;z-index:1;';
-      container.style.position = 'relative';
-      container.appendChild(canvas);
-      bgCanvasRef.current = canvas;
-    }
-    const canvas = bgCanvasRef.current;
-    const dpr  = window.devicePixelRatio || 1;
-    const rect  = container.getBoundingClientRect();
-    if (!rect.width) return;
-
-    canvas.width  = Math.floor(rect.width  * dpr);
-    canvas.height = Math.floor(rect.height * dpr);
-    canvas.style.width  = rect.width  + 'px';
-    canvas.style.height = rect.height + 'px';
-
-    const ctx = canvas.getContext('2d');
-    ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
-    ctx.clearRect(0, 0, rect.width, rect.height);
-
-    // MACD 히스토그램의 부호에 따라 배경 칠하기
-    const ts = chart.timeScale();
-    let prevX = null, prevSign = null;
-
-    for (let i = 0; i < macdData.length; i++) {
-      const d = macdData[i];
-      if (!Number.isFinite(d.histogram)) continue;
-      const sign = d.histogram >= 0 ? 1 : -1;
-      const x = ts.timeToCoordinate(d.time);
-      if (x == null) { prevX = null; prevSign = null; continue; }
-
-      if (prevX !== null && prevSign === sign) {
-        ctx.fillStyle = sign > 0
-          ? 'rgba(239,83,80,0.08)'   // 양수: 투명 빨강
-          : 'rgba(21,101,192,0.08)'; // 음수: 투명 파랑
-        ctx.fillRect(prevX, 0, x - prevX, rect.height);
-      }
-      prevX = x;
-      prevSign = sign;
-    }
-  }, []);
+  }, [drawMacdBackground]);
 
   // ─── Ichimoku cloud ──────────────────────────────────
   const drawCloud = useCallback((spanAData, spanBData) => {
     const container = ichiRef.current;
     const chart = charts.current.ichi;
     if (!container || !chart) return;
-    if (cloudCanvas.current) { try { cloudCanvas.current.remove(); } catch {} }
+    if (cloudCanvas.current) {
+      try { cloudCanvas.current.remove(); } catch (e) { console.warn('Cloud canvas remove skipped:', e); }
+    }
     const canvas = document.createElement('canvas');
     canvas.style.cssText = 'position:absolute;inset:0;pointer-events:none;z-index:1;';
     container.style.position = 'relative';
@@ -424,6 +427,14 @@ export default function ChartColumn({ id, defaultSymbol, defaultName }) {
   const fetchMain = useCallback(async (sym, tf, lim) => {
     if (!sym || !ser.current.candle) return;
     const r    = await fetch(`/api/ohlcv?symbol=${encodeURIComponent(sym)}&interval=${tf.interval}&limit=${lim}`);
+    const contentType = r.headers.get('content-type') || '';
+    if (!r.ok) {
+      const body = contentType.includes('application/json') ? await r.json().catch(() => null) : await r.text();
+      throw new Error(body?.error || body || `시세 조회 실패 (${r.status})`);
+    }
+    if (!contentType.includes('application/json')) {
+      throw new Error('시세 API가 JSON 대신 HTML을 반환했습니다. 배포 API 연결을 확인하세요.');
+    }
     const data = await r.json();
     if (!Array.isArray(data) || !data.length) return;
 
@@ -458,6 +469,14 @@ export default function ChartColumn({ id, defaultSymbol, defaultName }) {
   const fetchIchi = useCallback(async (sym, tf, lim) => {
     if (!sym || !ser.current.ichiCandle) return;
     const r    = await fetch(`/api/ohlcv?symbol=${encodeURIComponent(sym)}&interval=${tf.interval}&limit=${lim}`);
+    const contentType = r.headers.get('content-type') || '';
+    if (!r.ok) {
+      const body = contentType.includes('application/json') ? await r.json().catch(() => null) : await r.text();
+      throw new Error(body?.error || body || `시세 조회 실패 (${r.status})`);
+    }
+    if (!contentType.includes('application/json')) {
+      throw new Error('시세 API가 JSON 대신 HTML을 반환했습니다. 배포 API 연결을 확인하세요.');
+    }
     const data = await r.json();
     if (!Array.isArray(data) || !data.length) return;
 
@@ -479,12 +498,18 @@ export default function ChartColumn({ id, defaultSymbol, defaultName }) {
   // symbol/tf/limit 변경 시 로드
   useEffect(() => {
     if (!symbol) return;
-    setLoading(true);
-    setError('');
+    const timer = setTimeout(() => {
+      setError('');
+      setLoading(true);
+    }, 0);
     Promise.all([
       fetchMain(symbol, mainTf, limit).catch(e => setError(e.message)),
       fetchIchi(symbol, ichiTf, limit + 80).catch(() => {}),
-    ]).finally(() => setLoading(false));
+    ]).finally(() => {
+      clearTimeout(timer);
+      setLoading(false);
+    });
+    return () => clearTimeout(timer);
   }, [symbol, mainTf, ichiTf, limit, fetchMain, fetchIchi]);
 
   // ⑧ 실시간 업데이트: 분봉 1초, 일봉 5초
