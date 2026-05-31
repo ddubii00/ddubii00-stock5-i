@@ -633,29 +633,57 @@ export default function ChartColumn({ id, defaultSymbol, defaultName }) {
       ctx.beginPath();
       ctx.rect(0, 0, plotRight, rect.height);
       ctx.clip();
-      const draw = (cond, color) => {
-        const tops = [], bots = [];
-        for (let i = 0; i < spanAData.length; i++) {
-          const a = spanAData[i]?.value, b = spanBData[i]?.value;
-          if (!Number.isFinite(a) || !Number.isFinite(b) || !cond(a, b)) continue;
-          const x  = chart.timeScale().timeToCoordinate(spanAData[i].time);
+
+      const spanBMap = new Map(spanBData.map(d => [timeKey(d.time), d]));
+      const points = spanAData
+        .map((aPoint) => {
+          const bPoint = spanBMap.get(timeKey(aPoint.time));
+          const a = aPoint?.value;
+          const b = bPoint?.value;
+          if (!Number.isFinite(a) || !Number.isFinite(b)) return null;
+          const x = chart.timeScale().timeToCoordinate(aPoint.time);
           const yA = ser.current.spanA?.priceToCoordinate(a);
           const yB = ser.current.spanB?.priceToCoordinate(b);
-          if (x == null || yA == null || yB == null || x > plotRight) continue;
-          tops.push([x, Math.min(yA, yB)]);
-          bots.push([x, Math.max(yA, yB)]);
-        }
-        if (tops.length < 2) return;
+          if (x == null || yA == null || yB == null || x > plotRight) return null;
+          return {
+            x,
+            top: Math.min(yA, yB),
+            bottom: Math.max(yA, yB),
+            sign: a > b ? 1 : a < b ? -1 : 0,
+          };
+        })
+        .filter(Boolean);
+
+      const fillSegment = (segment, color) => {
+        if (segment.length < 2) return;
         ctx.beginPath();
-        ctx.moveTo(tops[0][0], tops[0][1]);
-        tops.forEach(p => ctx.lineTo(p[0], p[1]));
-        for (let i = bots.length - 1; i >= 0; i--) ctx.lineTo(bots[i][0], bots[i][1]);
+        ctx.moveTo(segment[0].x, segment[0].top);
+        segment.forEach(p => ctx.lineTo(p.x, p.top));
+        for (let i = segment.length - 1; i >= 0; i--) ctx.lineTo(segment[i].x, segment[i].bottom);
         ctx.closePath();
         ctx.fillStyle = color;
         ctx.fill();
       };
-      draw((a, b) => a > b, 'rgba(220,38,38,0.14)');
-      draw((a, b) => a < b, 'rgba(21,101,192,0.14)');
+
+      let segment = [];
+      let segmentSign = 0;
+      const colorForSign = (sign) => sign > 0 ? 'rgba(220,38,38,0.16)' : 'rgba(21,101,192,0.16)';
+      points.forEach((point) => {
+        if (point.sign === 0) {
+          if (segmentSign) fillSegment(segment, colorForSign(segmentSign));
+          segment = [point];
+          segmentSign = 0;
+          return;
+        }
+        if (segmentSign && point.sign !== segmentSign) {
+          fillSegment(segment, colorForSign(segmentSign));
+          segment = segment.length ? [segment[segment.length - 1], point] : [point];
+        } else {
+          segment.push(point);
+        }
+        segmentSign = point.sign;
+      });
+      if (segmentSign) fillSegment(segment, colorForSign(segmentSign));
       ctx.restore();
     };
     paint();
