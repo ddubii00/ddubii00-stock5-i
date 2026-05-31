@@ -23,6 +23,7 @@ const MAIN_TFS = [
 
 const ICHI_TFS = [
   { label: '1분',  interval: '1m' },
+  { label: '3분',  interval: '3m' },
   { label: '5분',  interval: '5m' },
   { label: '15분', interval: '15m' },
   { label: '30분', interval: '30m' },
@@ -48,6 +49,12 @@ function isIntradayTf(tf) {
 function requestLimit(tf, baseLimit) {
   const buffer = isIntradayTf(tf) ? 1200 : 720;
   return Math.min(Math.max(baseLimit + buffer, baseLimit * 4), 2000);
+}
+
+function ichimokuRequestLimit(tf, baseLimit) {
+  const minHistory = baseLimit + 52 + ICHIMOKU_DISPLACEMENT * 2;
+  if (!isIntradayTf(tf)) return Math.min(Math.max(minHistory + 360, baseLimit * 5), 2000);
+  return Math.min(Math.max(minHistory + 1800, baseLimit * 12), 2000);
 }
 
 function isKoreanSymbol(symbol) {
@@ -782,7 +789,7 @@ export default function ChartColumn({ id, defaultSymbol, defaultName }) {
 
   const fetchIchi = useCallback(async (sym, tf, lim) => {
     if (!sym || !ser.current.ichiCandle) return;
-    const r    = await fetch(`/api/ohlcv?symbol=${encodeURIComponent(sym)}&interval=${tf.interval}&limit=${requestLimit(tf, lim)}`);
+    const r    = await fetch(`/api/ohlcv?symbol=${encodeURIComponent(sym)}&interval=${tf.interval}&limit=${ichimokuRequestLimit(tf, lim)}`);
     const contentType = r.headers.get('content-type') || '';
     if (!r.ok) {
       const body = contentType.includes('application/json') ? await r.json().catch(() => null) : await r.text();

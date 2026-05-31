@@ -78,15 +78,15 @@ export async function fetchKoreanOhlcv(code, interval, limit) {
     } catch (e) {
       console.warn(`Intraday fetch failed for ${suffix} ${interval}:`, e.message);
       if (normalizedInterval === '5m') {
-        return fetchUsOhlcv(suffix, '15m', Math.min(limit, 120));
+        return fetchUsOhlcv(suffix, '15m', limit);
       }
       if (normalizedInterval === '15m') {
-        return fetchUsOhlcv(suffix, '30m', Math.min(limit, 120));
+        return fetchUsOhlcv(suffix, '30m', limit);
       }
       if (normalizedInterval === '30m') {
-        return fetchUsOhlcv(suffix, '60m', Math.min(limit, 120));
+        return fetchUsOhlcv(suffix, '60m', limit);
       }
-      return fetchUsOhlcv(suffix, 'day', Math.min(limit, 120));
+      return fetchUsOhlcv(suffix, 'day', limit);
     }
   }
 
@@ -148,7 +148,7 @@ export async function fetchUsOhlcv(symbol, interval, limit) {
   } catch (e) {
     if (['1m', '3m', '5m', '15m', '30m', '60m', '1h'].includes(interval)) {
       const fallbackInterval = fallbackIntervalFor(interval);
-      const fallbackLimit = Math.min(limit, 120);
+      const fallbackLimit = limit;
       return fetchUsOhlcv(symbol, fallbackInterval, fallbackLimit);
     }
     throw e;
@@ -173,7 +173,7 @@ export async function fetchUsOhlcv(symbol, interval, limit) {
     .slice(-limit);
 
   if (!quotes.length && ['1m', '3m', '5m', '15m', '30m', '60m', '1h'].includes(interval)) {
-    return fetchUsOhlcv(symbol, fallbackIntervalFor(interval), Math.min(limit, 120));
+    return fetchUsOhlcv(symbol, fallbackIntervalFor(interval), limit);
   }
 
   ohlcvCache.set(cacheKey, { ts: now, data: quotes });
