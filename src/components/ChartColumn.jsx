@@ -112,10 +112,14 @@ function koreanMarketMinute(time) {
 function filterKoreanRegularIntraday(candles, symbol, tf) {
   if (!isKoreanSymbol(symbol) || !isIntradayTf(tf)) return candles;
   const open = 9 * 60;
-  const regularClose = 15 * 60 + 20;
+  const auctionStart = 15 * 60 + 21;
+  const auctionEnd = 15 * 60 + 29;
+  const close = 15 * 60 + 30;
   return candles.filter((candle) => {
     const minute = koreanMarketMinute(candle.time);
-    return minute == null || (minute >= open && minute <= regularClose);
+    if (minute == null) return true;
+    if (minute < open || minute > close) return false;
+    return minute < auctionStart || minute > auctionEnd;
   });
 }
 
@@ -862,7 +866,7 @@ export default function ChartColumn({ id, defaultSymbol, defaultName }) {
       if (ichiViewKeyRef.current !== viewKey) {
         try {
           const fromTime = candles[Math.max(0, candles.length - visibleCount)]?.time;
-          const toTime = projectTime(candles[candles.length - 1]?.time, tf.interval, ICHIMOKU_DISPLACEMENT);
+          const toTime = projectTime(candles[candles.length - 1]?.time, tf.interval, ICHIMOKU_DISPLACEMENT + 1);
           charts.current.ichi?.timeScale().setVisibleRange({
             from: fromTime,
             to: toTime,

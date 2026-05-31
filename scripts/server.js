@@ -69,6 +69,33 @@ function parseNumeric(text) {
   return Number.isFinite(v) ? v : null;
 }
 
+function krxMinuteOfDay(time) {
+  if (typeof time !== 'number') return null;
+  const parts = new Intl.DateTimeFormat('en-US', {
+    timeZone: 'Asia/Seoul',
+    hour: '2-digit',
+    minute: '2-digit',
+    hour12: false,
+  }).formatToParts(new Date(time * 1000));
+  const hour = Number(parts.find(p => p.type === 'hour')?.value);
+  const minute = Number(parts.find(p => p.type === 'minute')?.value);
+  if (!Number.isFinite(hour) || !Number.isFinite(minute)) return null;
+  return hour * 60 + minute;
+}
+
+function filterKrxRegularMinutes(rows) {
+  const open = 9 * 60;
+  const auctionStart = 15 * 60 + 21;
+  const auctionEnd = 15 * 60 + 29;
+  const close = 15 * 60 + 30;
+  return rows.filter((row) => {
+    const minute = krxMinuteOfDay(row.time);
+    if (minute == null) return true;
+    if (minute < open || minute > close) return false;
+    return minute < auctionStart || minute > auctionEnd;
+  });
+}
+
 async function fetchUsOhlcv(symbol, interval, limit) {
   const cacheKey = `${symbol}:${interval}:${limit}`;
   const now = Date.now();
@@ -101,7 +128,7 @@ async function fetchUsOhlcv(symbol, interval, limit) {
   } catch (e) {
     if (['1m', '3m', '5m', '15m', '30m', '60m', '1h'].includes(interval)) {
       const fallbackInterval = fallbackIntervalFor(interval);
-      return fetchUsOhlcv(symbol, fallbackInterval, Math.min(limit, 120));
+      return fetchUsOhlcv(symbol, fallbackInterval, limit);
     }
     throw e;
   }
@@ -115,7 +142,7 @@ async function fetchUsOhlcv(symbol, interval, limit) {
     .slice(-limit);
 
   if (!quotes.length && ['1m', '3m', '5m', '15m', '30m', '60m', '1h'].includes(interval)) {
-    return fetchUsOhlcv(symbol, fallbackIntervalFor(interval), Math.min(limit, 120));
+    return fetchUsOhlcv(symbol, fallbackIntervalFor(interval), limit);
   }
 
   ohlcvCache.set(cacheKey, { ts: now, data: quotes });
@@ -127,13 +154,13 @@ async function fetchKoreanOhlcv(code, interval, limit) {
     const suffix = code.endsWith('.KS') || code.endsWith('.KQ') ? code : `${code}.KS`;
     const normalizedInterval = interval === '3m' ? '5m' : interval;
     try {
-      return await fetchUsOhlcv(suffix, normalizedInterval, limit);
+      return filterKrxRegularMinutes(await fetchUsOhlcv(suffix, normalizedInterval, limit));
     } catch (e) {
       console.warn(`Intraday fetch failed for ${suffix} ${interval}:`, e.message);
-      if (normalizedInterval === '5m') return fetchUsOhlcv(suffix, '15m', Math.min(limit, 120));
-      if (normalizedInterval === '15m') return fetchUsOhlcv(suffix, '30m', Math.min(limit, 120));
-      if (normalizedInterval === '30m') return fetchUsOhlcv(suffix, '60m', Math.min(limit, 120));
-      return fetchUsOhlcv(suffix, 'day', Math.min(limit, 120));
+      if (normalizedInterval === '5m') return filterKrxRegularMinutes(await fetchUsOhlcv(suffix, '15m', limit));
+      if (normalizedInterval === '15m') return filterKrxRegularMinutes(await fetchUsOhlcv(suffix, '30m', limit));
+      if (normalizedInterval === '30m') return filterKrxRegularMinutes(await fetchUsOhlcv(suffix, '60m', limit));
+      return fetchUsOhlcv(suffix, 'day', limit);
     }
   }
   const fetchCount = Math.min(limit + 300, 2500);
