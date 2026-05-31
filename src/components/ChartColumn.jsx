@@ -46,7 +46,7 @@ function isIntradayTf(tf) {
 
 function requestLimit(tf, baseLimit) {
   if (!isIntradayTf(tf)) return Math.min(baseLimit + 120, 2000);
-  return Math.min(Math.max(baseLimit, 10), 2000);
+  return Math.min(Math.max(baseLimit + 360, 480), 2000);
 }
 
 function isKoreanSymbol(symbol) {
