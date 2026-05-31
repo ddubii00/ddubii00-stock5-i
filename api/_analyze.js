@@ -107,6 +107,11 @@ function getGeminiModel() {
   return (process.env.GEMINI_MODEL || process.env.GOOGLE_AI_MODEL || 'gemini-2.5-flash').replace(/^models\//, '');
 }
 
+function getGeminiMaxOutputTokens() {
+  const value = Number(process.env.GEMINI_MAX_OUTPUT_TOKENS);
+  return Number.isFinite(value) && value > 0 ? value : 12000;
+}
+
 function extractGeminiText(payload) {
   const parts = payload?.candidates?.[0]?.content?.parts || [];
   const text = parts
@@ -160,7 +165,7 @@ export async function analyzeCharts({ symbol, symbolName, mainTf, limit, ichiTf,
       contents: [{ role: 'user', parts }],
       generationConfig: {
         temperature: 0.2,
-        maxOutputTokens: 4000,
+        maxOutputTokens: getGeminiMaxOutputTokens(),
       },
     }),
   });

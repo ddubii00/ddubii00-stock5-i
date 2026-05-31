@@ -442,8 +442,9 @@ html, body {
 }
 
 .analysis-modal {
-  width: min(920px, 94vw);
-  max-height: min(760px, 88vh);
+  width: min(1080px, 96vw);
+  height: min(900px, 92vh);
+  max-height: 92vh;
   display: flex;
   flex-direction: column;
   background: #fff;
@@ -488,7 +489,10 @@ html, body {
 .analysis-close-btn:hover { border-color: var(--accent); color: var(--accent); }
 
 .analysis-modal-body {
-  overflow: auto;
+  flex: 1;
+  min-height: 0;
+  overflow-y: auto;
+  overflow-x: hidden;
   padding: 16px;
 }
 .analysis-loading {
@@ -509,6 +513,8 @@ html, body {
   font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
   font-size: 12px;
   line-height: 1.6;
+  margin: 0;
+  padding-bottom: 24px;
   white-space: pre-wrap;
   word-break: break-word;
 }
