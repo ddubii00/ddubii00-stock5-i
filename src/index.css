@@ -184,7 +184,8 @@ html, body {
 }
 .period-input:focus { border-color: var(--accent); }
 
-.analysis-btn {
+.analysis-btn,
+.copy-chart-btn {
   border: 1px solid var(--accent);
   border-radius: 4px;
   background: var(--accent);
@@ -196,10 +197,29 @@ html, body {
   min-width: 52px;
   padding: 3px 9px;
 }
-.analysis-btn:hover { background: #1558ba; border-color: #1558ba; }
-.analysis-btn:disabled {
+.analysis-btn:hover,
+.copy-chart-btn:hover { background: #1558ba; border-color: #1558ba; }
+.analysis-btn:disabled,
+.copy-chart-btn:disabled {
   cursor: wait;
   opacity: .62;
+}
+.copy-chart-btn {
+  background: #fff;
+  color: var(--accent);
+}
+.copy-chart-btn:hover {
+  color: #fff;
+}
+.copy-chart-btn.copied {
+  border-color: #16a34a;
+  background: #16a34a;
+  color: #fff;
+}
+.copy-chart-btn.failed {
+  border-color: #dc2626;
+  background: #dc2626;
+  color: #fff;
 }
 
 /* ── MA LEGEND ── */

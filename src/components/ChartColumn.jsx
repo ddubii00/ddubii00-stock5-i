@@ -170,6 +170,74 @@ async function captureChartSection(section, label) {
   return { label, dataUrl: canvas.toDataURL('image/png') };
 }
 
+function loadImage(dataUrl) {
+  return new Promise((resolve, reject) => {
+    const image = new Image();
+    image.onload = () => resolve(image);
+    image.onerror = () => reject(new Error('차트 이미지를 PNG로 변환하지 못했습니다.'));
+    image.src = dataUrl;
+  });
+}
+
+function canvasToPngBlob(canvas) {
+  return new Promise((resolve, reject) => {
+    canvas.toBlob((blob) => {
+      if (blob) resolve(blob);
+      else reject(new Error('PNG 이미지를 만들지 못했습니다.'));
+    }, 'image/png');
+  });
+}
+
+async function buildChartSetPng(images, { symbolName, symbol, mainTf, limit, ichiTf, ichiLimit }) {
+  const loadedImages = await Promise.all(images.map(async image => ({
+    ...image,
+    element: await loadImage(image.dataUrl),
+  })));
+
+  const padding = 28;
+  const gap = 14;
+  const headerHeight = 62;
+  const width = Math.max(...loadedImages.map(image => image.element.width)) + padding * 2;
+  const height = headerHeight
+    + loadedImages.reduce((sum, image) => sum + image.element.height, 0)
+    + gap * (loadedImages.length - 1)
+    + padding;
+
+  const canvas = document.createElement('canvas');
+  canvas.width = width;
+  canvas.height = height;
+  const ctx = canvas.getContext('2d');
+
+  ctx.fillStyle = '#f3f6fb';
+  ctx.fillRect(0, 0, width, height);
+  ctx.fillStyle = '#111827';
+  ctx.font = '700 22px Inter, sans-serif';
+  ctx.fillText(`${symbolName || symbol || '종목'} 차트 세트`, padding, 32);
+  ctx.fillStyle = '#64748b';
+  ctx.font = '13px Inter, sans-serif';
+  ctx.fillText(`캔들/MACD: ${mainTf?.label || '-'} · 기간 ${limit} | 일목균형표: ${ichiTf?.label || '-'} · 기간 ${ichiLimit}`, padding, 53);
+
+  let y = headerHeight;
+  loadedImages.forEach(image => {
+    const x = Math.round((width - image.element.width) / 2);
+    ctx.fillStyle = '#ffffff';
+    ctx.fillRect(x, y, image.element.width, image.element.height);
+    ctx.drawImage(image.element, x, y);
+    y += image.element.height + gap;
+  });
+
+  return canvasToPngBlob(canvas);
+}
+
+async function copyPngToClipboard(blob) {
+  if (!navigator.clipboard?.write || typeof ClipboardItem === 'undefined') {
+    throw new Error('현재 브라우저가 PNG 클립보드 복사를 지원하지 않습니다. Chrome/Edge의 localhost 또는 HTTPS에서 사용해주세요.');
+  }
+  await navigator.clipboard.write([
+    new ClipboardItem({ [blob.type]: blob }),
+  ]);
+}
+
 function formatAxisTime(time, zone) {
   if (typeof time === 'string') {
     const normalized = time.replace('T', ' ').replace('Z', '');
@@ -319,6 +387,7 @@ export default function ChartColumn({ id, defaultSymbol, defaultName }) {
   const [analysisLoading, setAnalysisLoading] = useState(false);
   const [analysisError, setAnalysisError] = useState('');
   const [analysisResult, setAnalysisResult] = useState('');
+  const [copyStatus, setCopyStatus] = useState('');
   const [chartsReady, setChartsReady] = useState(false);
   const [loadVersion, setLoadVersion] = useState(0);
   const [mainVisible, setMainVisible] = useState({
@@ -1001,6 +1070,35 @@ export default function ChartColumn({ id, defaultSymbol, defaultName }) {
     }
   };
 
+  const captureChartSet = async () => Promise.all([
+    captureChartSection(priceSectionRef.current, '캔들차트'),
+    captureChartSection(volumeSectionRef.current, '거래량차트'),
+    captureChartSection(macdSectionRef.current, 'MACD'),
+    captureChartSection(ichiSectionRef.current, '일목균형표'),
+  ]);
+
+  const handleCopyChartSet = async () => {
+    setCopyStatus('copying');
+    try {
+      const images = await captureChartSet();
+      const blob = await buildChartSetPng(images, {
+        symbolName,
+        symbol,
+        mainTf,
+        limit,
+        ichiTf,
+        ichiLimit,
+      });
+      await copyPngToClipboard(blob);
+      setCopyStatus('copied');
+      setTimeout(() => setCopyStatus(''), 1800);
+    } catch (e) {
+      console.error('Chart set copy failed:', e);
+      setCopyStatus('failed');
+      setTimeout(() => setCopyStatus(''), 2600);
+    }
+  };
+
   const handleAnalyze = async () => {
     setAnalysisOpen(true);
     setAnalysisLoading(true);
@@ -1008,12 +1106,7 @@ export default function ChartColumn({ id, defaultSymbol, defaultName }) {
     setAnalysisResult('');
 
     try {
-      const images = await Promise.all([
-        captureChartSection(priceSectionRef.current, '캔들차트'),
-        captureChartSection(volumeSectionRef.current, '거래량차트'),
-        captureChartSection(macdSectionRef.current, 'MACD'),
-        captureChartSection(ichiSectionRef.current, '일목균형표'),
-      ]);
+      const images = await captureChartSet();
 
       const response = await fetch('/api/analyze', {
         method: 'POST',
@@ -1068,6 +1161,15 @@ export default function ChartColumn({ id, defaultSymbol, defaultName }) {
             </div>
           </div>
           <div className="period-group">
+            <button
+              type="button"
+              className={`copy-chart-btn${copyStatus === 'copied' ? ' copied' : ''}${copyStatus === 'failed' ? ' failed' : ''}`}
+              onClick={handleCopyChartSet}
+              disabled={copyStatus === 'copying' || !chartsReady}
+              title="현재 차트 1세트를 PNG로 클립보드에 복사"
+            >
+              {copyStatus === 'copying' ? '복사중' : copyStatus === 'copied' ? '복사됨' : copyStatus === 'failed' ? '복사실패' : '복사'}
+            </button>
             <button
               type="button"
               className="analysis-btn"
@@ -1191,7 +1293,7 @@ export default function ChartColumn({ id, defaultSymbol, defaultName }) {
           <div className="analysis-modal" role="dialog" aria-modal="true" aria-labelledby={`analysis-title-${id}`}>
             <div className="analysis-modal-header">
               <div>
-                <h2 id={`analysis-title-${id}`}>GPT 차트 분석</h2>
+                <h2 id={`analysis-title-${id}`}>Gemini 차트 분석</h2>
                 <p>{symbolName || symbol} · {mainTf.label} · 기간 {limit}</p>
               </div>
               <button type="button" className="analysis-close-btn" onClick={() => setAnalysisOpen(false)}>

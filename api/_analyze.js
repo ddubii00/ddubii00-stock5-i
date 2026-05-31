@@ -88,10 +88,39 @@ function normalizeImages(images) {
     }));
 }
 
+function parseDataUrl(dataUrl) {
+  const match = /^data:([^;,]+);base64,(.+)$/s.exec(dataUrl);
+  if (!match) {
+    throw new Error('차트 이미지 형식이 올바르지 않습니다.');
+  }
+  return {
+    mimeType: match[1],
+    data: match[2],
+  };
+}
+
+function getGeminiApiKey() {
+  return process.env.GEMINI_API_KEY || process.env.GOOGLE_AI_API_KEY || process.env.GOOGLE_API_KEY || '';
+}
+
+function getGeminiModel() {
+  return (process.env.GEMINI_MODEL || process.env.GOOGLE_AI_MODEL || 'gemini-2.5-flash').replace(/^models\//, '');
+}
+
+function extractGeminiText(payload) {
+  const parts = payload?.candidates?.[0]?.content?.parts || [];
+  const text = parts
+    .map(part => part?.text)
+    .filter(Boolean)
+    .join('\n')
+    .trim();
+  return text || '';
+}
+
 export async function analyzeCharts({ symbol, symbolName, mainTf, limit, ichiTf, ichiLimit, images }) {
-  const apiKey = process.env.OPENAI_API_KEY;
+  const apiKey = getGeminiApiKey();
   if (!apiKey) {
-    throw new Error('OPENAI_API_KEY 환경변수가 설정되어 있지 않습니다. Vercel Project Settings > Environment Variables에 추가하세요.');
+    throw new Error('GEMINI_API_KEY 환경변수가 설정되어 있지 않습니다. Vercel Project Settings > Environment Variables에 Google AI Studio API 키를 추가하세요.');
   }
 
   const chartImages = normalizeImages(images);
@@ -108,46 +137,40 @@ export async function analyzeCharts({ symbol, symbolName, mainTf, limit, ichiTf,
     `일목균형표 기준 기간: ${ichiLimit || '확인 불가'}`,
   ].join('\n');
 
-  const content = [
-    {
-      type: 'text',
-      text: `${ANALYSIS_PROMPT}\n\n[차트 메타데이터]\n${metadata}`,
-    },
+  const parts = [
+    { text: `${ANALYSIS_PROMPT}\n\n[차트 메타데이터]\n${metadata}` },
     ...chartImages.map(image => ({
-      type: 'image_url',
-      image_url: {
-        url: image.dataUrl,
-        detail: 'high',
-      },
+      inline_data: parseDataUrl(image.dataUrl),
     })),
   ];
 
-  const response = await fetch('https://api.openai.com/v1/chat/completions', {
+  const model = getGeminiModel();
+  const response = await fetch(`https://generativelanguage.googleapis.com/v1beta/models/${encodeURIComponent(model)}:generateContent`, {
     method: 'POST',
     headers: {
-      Authorization: `Bearer ${apiKey}`,
+      'x-goog-api-key': apiKey,
       'Content-Type': 'application/json',
     },
     body: JSON.stringify({
-      model: process.env.OPENAI_MODEL || 'gpt-4o-mini',
-      messages: [
-        {
-          role: 'system',
-          content: '사용자가 제공한 차트 이미지에 보이는 정보만 근거로 기술적 분석을 작성한다. 투자 자문처럼 단정하지 말고 조건부 시나리오로 답한다.',
-        },
-        { role: 'user', content },
-      ],
-      temperature: 0.2,
-      max_tokens: 4000,
+      system_instruction: {
+        parts: [{
+          text: '사용자가 제공한 차트 이미지에 보이는 정보만 근거로 기술적 분석을 작성한다. 투자 자문처럼 단정하지 말고 조건부 시나리오로 답한다.',
+        }],
+      },
+      contents: [{ role: 'user', parts }],
+      generationConfig: {
+        temperature: 0.2,
+        maxOutputTokens: 4000,
+      },
     }),
   });
 
   const payload = await response.json().catch(() => null);
   if (!response.ok) {
-    throw new Error(payload?.error?.message || `OpenAI API 요청 실패 (${response.status})`);
+    throw new Error(payload?.error?.message || `Gemini API 요청 실패 (${response.status})`);
   }
 
-  const result = payload?.choices?.[0]?.message?.content;
-  if (!result) throw new Error('OpenAI API 응답에서 분석 결과를 찾을 수 없습니다.');
+  const result = extractGeminiText(payload);
+  if (!result) throw new Error('Gemini API 응답에서 분석 결과를 찾을 수 없습니다.');
   return result;
 }
