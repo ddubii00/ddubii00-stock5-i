@@ -310,10 +310,9 @@ export default function ChartColumn({ id, defaultSymbol, defaultName }) {
   // ③ MACD 배경색 캔버스에 그리기
   const drawMacdBackground = useCallback(() => {
     const container = priceRef.current;
-    const chart = charts.current.price;
     const macdChart = charts.current.macd;
     const macdData  = macdDataRef.current;
-    if (!container || !chart || !macdChart || !macdData.length) return;
+    if (!container || !macdChart || !macdData.length) return;
 
     if (!bgCanvasRef.current) {
       const canvas = document.createElement('canvas');
@@ -337,7 +336,7 @@ export default function ChartColumn({ id, defaultSymbol, defaultName }) {
     ctx.clearRect(0, 0, rect.width, rect.height);
 
     // MACD 0선 기준으로 배경 칠하기
-    const ts = chart.timeScale();
+    const ts = macdChart.timeScale();
     let prevX = null, prevFill = null;
     let firstX = null, firstFill = null;
     const plotRight = typeof ts.width === 'function'
@@ -619,6 +618,13 @@ export default function ChartColumn({ id, defaultSymbol, defaultName }) {
       const ctx = canvas.getContext('2d');
       ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
       ctx.clearRect(0, 0, rect.width, rect.height);
+      const plotRight = typeof chart.timeScale().width === 'function'
+        ? chart.timeScale().width()
+        : Math.max(0, rect.width - PRICE_SCALE_WIDTH);
+      ctx.save();
+      ctx.beginPath();
+      ctx.rect(0, 0, plotRight, rect.height);
+      ctx.clip();
       const draw = (cond, color) => {
         const tops = [], bots = [];
         for (let i = 0; i < spanAData.length; i++) {
@@ -627,7 +633,7 @@ export default function ChartColumn({ id, defaultSymbol, defaultName }) {
           const x  = chart.timeScale().timeToCoordinate(spanAData[i].time);
           const yA = ser.current.spanA?.priceToCoordinate(a);
           const yB = ser.current.spanB?.priceToCoordinate(b);
-          if (x == null || yA == null || yB == null) continue;
+          if (x == null || yA == null || yB == null || x > plotRight) continue;
           tops.push([x, Math.min(yA, yB)]);
           bots.push([x, Math.max(yA, yB)]);
         }
@@ -642,6 +648,7 @@ export default function ChartColumn({ id, defaultSymbol, defaultName }) {
       };
       draw((a, b) => a > b, 'rgba(220,38,38,0.14)');
       draw((a, b) => a < b, 'rgba(21,101,192,0.14)');
+      ctx.restore();
     };
     paint();
     requestAnimationFrame(paint);
