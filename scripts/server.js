@@ -1,4 +1,5 @@
 import process from 'node:process';
+import { existsSync } from 'node:fs';
 import express from 'express';
 import cors from 'cors';
 import YahooFinance from 'yahoo-finance2';
@@ -236,6 +237,16 @@ app.get('/api/ohlcv', async (req, res) => {
     return res.status(500).json({ error: e.message });
   }
 });
+
+const distDir = new URL('../dist/', import.meta.url);
+const indexHtml = new URL('../dist/index.html', import.meta.url);
+
+if (existsSync(distDir)) {
+  app.use(express.static(distDir.pathname));
+  app.get(/^(?!\/api(?:\/|$)).*/, (_req, res) => {
+    res.sendFile(indexHtml.pathname);
+  });
+}
 
 if (process.env.VERCEL !== '1') {
   app.listen(PORT, () => {

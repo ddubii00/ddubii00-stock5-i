@@ -3,6 +3,7 @@
   "private": true,
   "version": "0.0.0",
   "type": "module",
+  "main": "index.js",
   "scripts": {
     "dev": "concurrently \"vite --host 127.0.0.1\" \"nodemon scripts/server.js\"",
     "build": "vite build",
