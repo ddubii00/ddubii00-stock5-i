@@ -385,13 +385,13 @@ html, body {
   pointer-events: none;
   background: rgba(255, 255, 255, 0.96);
   border: 1px solid #e2e5ec;
-  border-radius: 8px;
-  padding: 8px 12px;
-  box-shadow: 0 6px 20px rgba(0,0,0,0.14);
-  min-width: 160px;
-  max-width: 220px;
-  font-size: 12px;
-  backdrop-filter: blur(4px);
+  border-radius: 6px;
+  padding: 5px 8px;
+  box-shadow: 0 5px 14px rgba(0,0,0,0.12);
+  width: 132px;
+  font-size: 11px;
+  line-height: 1.2;
+  backdrop-filter: blur(3px);
 }
 
 .tt-date {
@@ -404,26 +404,29 @@ html, body {
 
 .tt-row {
   display: flex;
-  gap: 10px;
+  gap: 4px;
   justify-content: space-between;
-  margin-bottom: 3px;
-  font-size: 12px;
+  margin-bottom: 2px;
+  font-size: 11px;
+  white-space: nowrap;
 }
 .tt-row b { font-weight: 600; }
 
 .tt-gray { color: var(--muted); }
 
 .tt-ma-row {
-  display: flex;
-  flex-wrap: wrap;
-  gap: 6px;
-  margin-top: 5px;
-  padding-top: 5px;
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 4px 6px;
+  margin-top: 3px;
+  padding-top: 3px;
   border-top: 1px solid #f0f2f5;
 }
 .tt-ma {
-  font-size: 11px;
+  font-size: 10.5px;
   font-weight: 500;
+  white-space: nowrap;
+  min-width: 0;
 }
 .tt-ma b { font-weight: 600; }
 

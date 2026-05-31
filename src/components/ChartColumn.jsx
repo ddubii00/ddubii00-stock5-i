@@ -259,19 +259,6 @@ function formatAxisTime(time, zone) {
   return String(time);
 }
 
-function formatTooltipTime(time, zone) {
-  if (typeof time !== 'number') return formatAxisTime(time, zone);
-  return new Date(time * 1000).toLocaleString('ko-KR', {
-    timeZone: zone,
-    year: 'numeric',
-    month: '2-digit',
-    day: '2-digit',
-    hour: '2-digit',
-    minute: '2-digit',
-    hour12: false,
-  }).replace(/\. /g, '.').replace(/\.$/, '');
-}
-
 function timeKey(time) {
   if (typeof time === 'string') return time.slice(0, 16);
   return String(time);
@@ -686,30 +673,26 @@ export default function ChartColumn({ id, defaultSymbol, defaultName }) {
                 const isUp  = data.close >= data.open;
                 const color = isUp ? '#dc2626' : '#1565c0';
                 const tk    = timeKey(param.time);
-                const maRows = MA_PERIODS.map((p, idx) => {
+                const maRows = MA_PERIODS.slice(0, 4).map((p, idx) => {
                   const val = maMaps.current[idx]?.get(tk);
                   return val != null
-                    ? `<span class="tt-ma" style="color:${MA_COLORS[idx]}">MA${p} <b>${formatPriceLabel(val, symbolRef.current)}</b></span>`
+                    ? `<span class="tt-ma" style="color:${MA_COLORS[idx]}">${p} <b>${formatPriceLabel(val, symbolRef.current)}</b></span>`
                     : '';
                 }).join('');
 
                 tip.innerHTML =
-                  `<div class="tt-date">${formatTooltipTime(param.time, timeZoneRef.current)}</div>` +
                   `<div class="tt-row" style="color:${color}">` +
                   `<span>시가 <b>${formatPriceLabel(data.open, symbolRef.current)}</b></span>` +
                   `<span>종가 <b>${formatPriceLabel(data.close, symbolRef.current)}</b></span>` +
                   `</div>` +
-                  `<div class="tt-row tt-gray">` +
-                  `<span>고가 ${formatPriceLabel(data.high, symbolRef.current)}</span>` +
-                  `<span>저가 ${formatPriceLabel(data.low, symbolRef.current)}</span>` +
-                  `</div>` +
                   (maRows ? `<div class="tt-ma-row">${maRows}</div>` : '');
 
                 const cw = priceRef.current?.clientWidth || 400;
-                let lx = param.point.x + 12;
-                if (lx + 200 > cw) lx = param.point.x - 205;
+                let lx = param.point.x - 146;
+                if (lx < 4) lx = param.point.x + 12;
+                if (lx + 136 > cw) lx = Math.max(4, cw - 136);
                 tip.style.left = lx + 'px';
-                tip.style.top  = Math.max(4, param.point.y - 70) + 'px';
+                tip.style.top  = Math.max(4, param.point.y - 42) + 'px';
                 tip.style.display = 'block';
               }
             }
