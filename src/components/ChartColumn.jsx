@@ -81,6 +81,13 @@ function formatVolumeLabel(value) {
   return formatNumberNoDecimals(n);
 }
 
+function volumeColorByChange(currentVolume, previousVolume) {
+  if (!Number.isFinite(currentVolume) || !Number.isFinite(previousVolume)) {
+    return '#ef5350';
+  }
+  return currentVolume >= previousVolume ? '#ef5350' : '#1565c0';
+}
+
 function formatAxisTime(time, zone) {
   if (typeof time === 'string') {
     const normalized = time.replace('T', ' ').replace('Z', '');
@@ -475,10 +482,18 @@ export default function ChartColumn({ id, defaultSymbol, defaultName }) {
     // ⑧ 타임스케일 동기화 (양방향: price↔volume↔macd)
     const triCharts = [pc, vc, mc];
     triCharts.forEach((chart, i) => {
-      chart.timeScale().subscribeVisibleTimeRangeChange((range) => {
+      chart.timeScale().subscribeVisibleLogicalRangeChange((range) => {
         if (syncLock.current || !range) return;
         syncLock.current = true;
-        triCharts.forEach((other, j) => { if (j !== i) other.timeScale().setVisibleRange(range); });
+        triCharts.forEach((other, j) => {
+          if (j !== i) {
+            try {
+              other.timeScale().setVisibleLogicalRange(range);
+            } catch (e) {
+              console.warn('Visible range sync skipped:', e);
+            }
+          }
+        });
         // ③ MACD 배경 다시 그리기
         drawMacdBackground();
         syncLock.current = false;
@@ -671,9 +686,18 @@ export default function ChartColumn({ id, defaultSymbol, defaultName }) {
     });
 
     // 거래량
+    const startIndex = candles.length - visibleCandles.length;
     const volData = visibleCandles
       .filter(d => d.volume != null && Number.isFinite(+d.volume))
-      .map(d => ({ time: d.time, value: +d.volume, color: d.close >= d.open ? '#ef5350' : '#1565c0' }));
+      .map((d, i) => {
+        const currentVolume = +d.volume;
+        const previousVolume = candles[startIndex + i - 1]?.volume;
+        return {
+          time: d.time,
+          value: currentVolume,
+          color: volumeColorByChange(currentVolume, previousVolume),
+        };
+      });
     ser.current.vol.setData(volData.filter(d => Number.isFinite(d.value)));
     crosshairValueMapsRef.current.volume = new Map(volData.map(d => [timeKey(d.time), d.value]));
 
