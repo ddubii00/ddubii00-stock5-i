@@ -261,6 +261,7 @@ export default function ChartColumn({ id, defaultSymbol, defaultName }) {
   const symbolRef   = useRef(symbol);
   const timeZoneRef = useRef(symbolTimeZone(symbol));
   const mainViewKeyRef = useRef('');
+  const ichiViewKeyRef = useRef('');
   const cloudCanvas = useRef(null);
   const syncLock    = useRef(false);
   const xhairLock   = useRef(false);
@@ -756,10 +757,11 @@ export default function ChartColumn({ id, defaultSymbol, defaultName }) {
 
     const candles = normalizeCandleData(data);
     if (!candles.length) throw new Error('일목균형표 데이터가 비어 있습니다.');
-    const visibleCandles = candles.slice(-ichiLimit);
-    ser.current.ichiCandle.setData(visibleCandles);
+    ser.current.ichiCandle.setData(candles);
     const ichi = calculateIchimoku(candles);
-    const visibleIchi = ichi.slice(-ichiLimit);
+    const visibleCount = Math.min(Math.max(Number(lim) || ichiLimit, 1), candles.length);
+    const visibleCandles = candles.slice(-visibleCount);
+    const visibleIchi = ichi.slice(-visibleCount);
 
     const spanAData = visibleIchi
       .map((d, i) => d.senkouA != null ? ({
@@ -779,7 +781,21 @@ export default function ChartColumn({ id, defaultSymbol, defaultName }) {
     ser.current.chikou.setData(safeLineData(visibleIchi.map((d, i) => ({ time: visibleCandles[i]?.time, value: d.chikou })).filter(d => d.time != null)));
     ser.current.spanA.setData( safeLineData(spanAData));
     ser.current.spanB.setData( safeLineData(spanBData));
-    drawCloud(spanAData, spanBData);
+    const viewKey = `${sym}:${tf.interval}:${visibleCount}`;
+    requestAnimationFrame(() => {
+      if (ichiViewKeyRef.current !== viewKey) {
+        try {
+          charts.current.ichi?.timeScale().setVisibleLogicalRange({
+            from: Math.max(0, candles.length - visibleCount),
+            to: Math.max(0, candles.length - 1),
+          });
+        } catch (e) {
+          console.warn('Ichi visible range sync skipped:', e);
+        }
+        ichiViewKeyRef.current = viewKey;
+      }
+      drawCloud(spanAData, spanBData);
+    });
   }, [drawCloud, ichiLimit]);
 
   // symbol/tf/limit 변경 시 로드
@@ -793,7 +809,7 @@ export default function ChartColumn({ id, defaultSymbol, defaultName }) {
       fetchMain(symbol, mainTf, limit).catch(e => {
         if (!String(e.message || '').includes('Value is null')) setError(e.message);
       }),
-      fetchIchi(symbol, ichiTf, ichiLimit + ICHIMOKU_DISPLACEMENT).catch(() => {}),
+      fetchIchi(symbol, ichiTf, ichiLimit).catch(() => {}),
     ]).finally(() => {
       clearTimeout(timer);
       setLoading(false);
@@ -827,7 +843,7 @@ export default function ChartColumn({ id, defaultSymbol, defaultName }) {
     const isIntra = INTRA_INTERVALS.includes(ichiTf.interval);
     const ms = isIntra ? 1000 : 5000;
     const t = setInterval(() => {
-      if (isMarketOpen()) fetchIchi(symbol, ichiTf, ichiLimit + ICHIMOKU_DISPLACEMENT).catch(() => {});
+      if (isMarketOpen()) fetchIchi(symbol, ichiTf, ichiLimit).catch(() => {});
     }, ms);
     return () => clearInterval(t);
   }, [symbol, ichiTf, ichiLimit, chartsReady, fetchIchi]);
