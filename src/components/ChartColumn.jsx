@@ -431,7 +431,7 @@ export default function ChartColumn({ id, defaultSymbol, defaultName }) {
     // MA 라인들
     ser.current.maLines = MA_PERIODS.map((_, idx) =>
       pc.addSeries(LineSeries, {
-        color: MA_COLORS[idx], lineWidth: 2,
+        color: MA_COLORS[idx], lineWidth: 1,
         crosshairMarkerVisible: false,
         priceFormat: { type: 'custom', formatter: (price) => formatPriceLabel(price, symbolRef.current) },
         ...NO_PRICE_LINE,
@@ -768,7 +768,7 @@ export default function ChartColumn({ id, defaultSymbol, defaultName }) {
       fetchMain(symbol, mainTf, limit).catch(e => {
         if (!String(e.message || '').includes('Value is null')) setError(e.message);
       }),
-      fetchIchi(symbol, ichiTf, ichiLimit).catch(() => {}),
+      fetchIchi(symbol, ichiTf, ichiLimit + ICHIMOKU_DISPLACEMENT).catch(() => {}),
     ]).finally(() => {
       clearTimeout(timer);
       setLoading(false);
@@ -802,7 +802,7 @@ export default function ChartColumn({ id, defaultSymbol, defaultName }) {
     const isIntra = INTRA_INTERVALS.includes(ichiTf.interval);
     const ms = isIntra ? 1000 : 5000;
     const t = setInterval(() => {
-      if (isMarketOpen()) fetchIchi(symbol, ichiTf, ichiLimit).catch(() => {});
+      if (isMarketOpen()) fetchIchi(symbol, ichiTf, ichiLimit + ICHIMOKU_DISPLACEMENT).catch(() => {});
     }, ms);
     return () => clearInterval(t);
   }, [symbol, ichiTf, ichiLimit, chartsReady, fetchIchi]);
