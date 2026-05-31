@@ -38,7 +38,7 @@ export function calculateMACD(ohlcv, fastPeriod = 12, slowPeriod = 26, signalPer
       macd,
       signal,
       histogram,
-      color: histogram !== null ? (histogram >= 0 ? '#26a69a' : '#ef5350') : 'transparent',
+      color: histogram !== null ? (histogram >= 0 ? '#ef5350' : '#1565c0') : 'transparent',
     });
   }
 

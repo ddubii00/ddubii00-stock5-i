@@ -77,18 +77,34 @@ async function fetchUsOhlcv(symbol, interval, limit) {
   if (cached && now - cached.ts < ttl) return cached.data;
 
   const intervalMap = {
-    '1m': '1m', '3m': '3m', '5m': '5m', '10m': '10m',
+    '1m': '1m', '3m': '5m', '5m': '5m', '10m': '10m',
     '15m': '15m', '30m': '30m', '60m': '1h', '1h': '1h',
     day: '1d', week: '1wk', month: '1mo',
   };
   const yInterval = intervalMap[interval] || '1d';
-  const daysPerBar = { '1m': 1 / 390, '3m': 3 / 390, '5m': 5 / 390, '15m': 15 / 390, '30m': 0.1, '60m': 0.2, '1h': 0.2, day: 1, week: 7, month: 30 };
+  const daysPerBar = { '1m': 1 / 390, '3m': 5 / 390, '5m': 5 / 390, '15m': 15 / 390, '30m': 0.1, '60m': 0.2, '1h': 0.2, day: 1, week: 7, month: 30 };
   const daysPer = daysPerBar[interval] || 1;
-  const daysBack = Math.ceil(limit * daysPer * 2) + 60;
-  const maxDays = { '1m': 7, '3m': 30, '5m': 60, '15m': 60, '30m': 90, '60m': 180, '1h': 180 };
+  const daysBack = Math.ceil(limit * daysPer * 2.5) + 2;
+  const maxDays = { '1m': 7, '3m': 14, '5m': 59, '15m': 59, '30m': 59, '60m': 59, '1h': 59 };
   const actualDays = Math.min(daysBack, maxDays[interval] || daysBack);
   const period1 = new Date(Date.now() - actualDays * 24 * 3600000).toISOString().slice(0, 10);
-  const result = await yahooFinance.chart(symbol, { period1, interval: yInterval });
+  const fallbackIntervalFor = (value) => value === '1m' ? '5m'
+    : value === '3m' ? '5m'
+      : value === '5m' ? '15m'
+        : value === '15m' ? '30m'
+          : value === '30m' ? '60m'
+            : 'day';
+
+  let result;
+  try {
+    result = await yahooFinance.chart(symbol, { period1, interval: yInterval });
+  } catch (e) {
+    if (['1m', '3m', '5m', '15m', '30m', '60m', '1h'].includes(interval)) {
+      const fallbackInterval = fallbackIntervalFor(interval);
+      return fetchUsOhlcv(symbol, fallbackInterval, Math.min(limit, 120));
+    }
+    throw e;
+  }
   const quotes = (result.quotes || [])
     .map(q => {
       const d = new Date(q.date);
@@ -97,6 +113,11 @@ async function fetchUsOhlcv(symbol, interval, limit) {
     })
     .filter(x => x.open !== null && x.close !== null && x.high !== null && x.low !== null)
     .slice(-limit);
+
+  if (!quotes.length && ['1m', '3m', '5m', '15m', '30m', '60m', '1h'].includes(interval)) {
+    return fetchUsOhlcv(symbol, fallbackIntervalFor(interval), Math.min(limit, 120));
+  }
+
   ohlcvCache.set(cacheKey, { ts: now, data: quotes });
   return quotes;
 }
@@ -104,7 +125,16 @@ async function fetchUsOhlcv(symbol, interval, limit) {
 async function fetchKoreanOhlcv(code, interval, limit) {
   if (interval !== 'day') {
     const suffix = code.endsWith('.KS') || code.endsWith('.KQ') ? code : `${code}.KS`;
-    return fetchUsOhlcv(suffix, interval, limit);
+    const normalizedInterval = interval === '3m' ? '5m' : interval;
+    try {
+      return await fetchUsOhlcv(suffix, normalizedInterval, limit);
+    } catch (e) {
+      console.warn(`Intraday fetch failed for ${suffix} ${interval}:`, e.message);
+      if (normalizedInterval === '5m') return fetchUsOhlcv(suffix, '15m', Math.min(limit, 120));
+      if (normalizedInterval === '15m') return fetchUsOhlcv(suffix, '30m', Math.min(limit, 120));
+      if (normalizedInterval === '30m') return fetchUsOhlcv(suffix, '60m', Math.min(limit, 120));
+      return fetchUsOhlcv(suffix, 'day', Math.min(limit, 120));
+    }
   }
   const fetchCount = Math.min(limit + 300, 2500);
   const url = `https://fchart.stock.naver.com/sise.nhn?symbol=${encodeURIComponent(code)}&timeframe=day&count=${fetchCount}&requestType=0`;
@@ -169,7 +199,7 @@ app.get('/api/ohlcv', async (req, res) => {
     else if (isKorean && interval === 'day') {
       data = await fetchKoreanOhlcv(code, interval, lim);
       data = data.map(x => ({ ...x, time: x.date ? x.date.replace(/(\d{4})(\d{2})(\d{2})/, '$1-$2-$3') : x.time }));
-    } else if (isKorean) data = await fetchUsOhlcv(`${code}.KS`, interval, lim);
+    } else if (isKorean) data = await fetchKoreanOhlcv(code, interval, lim);
     else data = await fetchUsOhlcv(symbol, interval, lim);
     const seen = new Set();
     data = data.filter(d => { if (seen.has(d.time)) return false; seen.add(d.time); return true; }).sort((a, b) => (a.time > b.time ? 1 : -1));
@@ -187,4 +217,3 @@ if (process.env.VERCEL !== '1') {
 }
 
 export default app;
-

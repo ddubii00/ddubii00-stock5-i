@@ -21,7 +21,7 @@ export default async function handler(req, res) {
         time: x.date ? x.date.replace(/(\d{4})(\d{2})(\d{2})/, '$1-$2-$3') : x.time,
       }));
     } else if (isKorean) {
-      data = await fetchUsOhlcv(code + '.KS', interval, lim);
+      data = await fetchKoreanOhlcv(code, interval, lim);
     } else {
       data = await fetchUsOhlcv(symbol, interval, lim);
     }
@@ -41,4 +41,3 @@ export default async function handler(req, res) {
     return res.status(500).json({ error: e.message });
   }
 }
-

@@ -29,31 +29,92 @@ const ICHI_TFS = [
   { label: '1시간',interval: '60m' },
   { label: '일',   interval: 'day' },
   { label: '주',   interval: 'week' },
+  { label: '월',   interval: 'month' },
 ];
 
-const MA_PERIODS = [5, 20, 60];
-const MA_COLORS  = ['#f59e0b', '#a855f7', '#06b6d4'];
+const MA_PERIODS = [5, 10, 20, 60, 120];
+const MA_COLORS  = ['#f59e0b', '#22c55e', '#a855f7', '#06b6d4', '#64748b'];
 const INTRA_INTERVALS = ['1m','3m','5m','15m','30m','60m'];
+const PRICE_SCALE_WIDTH = 92;
 
 // ④ 마지막 종가 수평 점선 제거를 위한 헬퍼
 const NO_PRICE_LINE = { priceLineVisible: false, lastValueVisible: false };
 
-/** 날짜 포맷: 2026.03.02 (시간 없음) */
-function fmtTime(time) {
-  if (typeof time === 'string') return time.slice(0, 10).replace(/-/g, '.');
+function isIntradayTf(tf) {
+  return INTRA_INTERVALS.includes(tf?.interval);
+}
+
+function requestLimit(tf, baseLimit) {
+  return Math.min(Math.max(baseLimit, 10), 2000);
+}
+
+function isKoreanSymbol(symbol) {
+  return /^\d{6}(\.(KS|KQ))?$/.test(symbol || '') || /\.(KS|KQ)$/.test(symbol || '');
+}
+
+function isIndexSymbol(symbol) {
+  return String(symbol || '').startsWith('^');
+}
+
+function symbolTimeZone(symbol) {
+  return isKoreanSymbol(symbol) ? 'Asia/Seoul' : 'America/New_York';
+}
+
+function formatNumberNoDecimals(value) {
+  return Math.round(Number(value) || 0).toLocaleString('ko-KR');
+}
+
+function formatPriceLabel(value, symbol) {
+  if (isIndexSymbol(symbol)) return formatNumberNoDecimals(value);
+  const n = Number(value);
+  if (!Number.isFinite(n)) return '';
+  if (Math.abs(n) >= 1000) return `${formatNumberNoDecimals(n / 1000)}k`;
+  return formatNumberNoDecimals(n);
+}
+
+function formatVolumeLabel(value) {
+  const n = Number(value);
+  if (!Number.isFinite(n)) return '';
+  if (Math.abs(n) >= 1000) return `${formatNumberNoDecimals(n / 1000)}k`;
+  return formatNumberNoDecimals(n);
+}
+
+function formatAxisTime(time, zone) {
+  if (typeof time === 'string') {
+    const normalized = time.replace('T', ' ').replace('Z', '');
+    const [datePart, timePart] = normalized.split(' ');
+    if (!timePart) return datePart.replace(/-/g, '.');
+    return `${datePart.replace(/-/g, '.') } ${timePart.slice(0, 5)}`;
+  }
   if (typeof time === 'number') {
     const d = new Date(time * 1000);
-    return [
-      d.getUTCFullYear(),
-      String(d.getUTCMonth() + 1).padStart(2, '0'),
-      String(d.getUTCDate()).padStart(2, '0'),
-    ].join('.');
+    return d.toLocaleString('ko-KR', {
+      timeZone: zone,
+      month: '2-digit',
+      day: '2-digit',
+      hour: '2-digit',
+      minute: '2-digit',
+      hour12: false,
+    }).replace(/\. /g, '.').replace(/\.$/, '');
   }
   return String(time);
 }
 
+function formatTooltipTime(time, zone) {
+  if (typeof time !== 'number') return formatAxisTime(time, zone);
+  return new Date(time * 1000).toLocaleString('ko-KR', {
+    timeZone: zone,
+    year: 'numeric',
+    month: '2-digit',
+    day: '2-digit',
+    hour: '2-digit',
+    minute: '2-digit',
+    hour12: false,
+  }).replace(/\. /g, '.').replace(/\.$/, '');
+}
+
 function timeKey(time) {
-  if (typeof time === 'string') return time.slice(0, 10);
+  if (typeof time === 'string') return time.slice(0, 16);
   return String(time);
 }
 
@@ -66,15 +127,30 @@ function isMarketOpen() {
   return (m >= 0 && m <= 390) || (m >= 870 && m <= 1260);
 }
 
-/** ② "Value is null" 방지: lightweight-charts에 null 전달 금지 */
-function safeCandleData(arr) {
-  return arr.filter(d =>
-    d != null &&
-    Number.isFinite(d.open) &&
-    Number.isFinite(d.high) &&
-    Number.isFinite(d.low) &&
-    Number.isFinite(d.close)
-  );
+/** ② "Value is null" 방지: lightweight-charts에 null/중복/시간 없는 캔들 전달 금지 */
+function normalizeCandleData(arr) {
+  const rows = (arr || [])
+    .filter(d =>
+      d != null &&
+      (typeof d.time === 'string' || Number.isFinite(d.time)) &&
+      Number.isFinite(d.open) &&
+      Number.isFinite(d.high) &&
+      Number.isFinite(d.low) &&
+      Number.isFinite(d.close)
+    )
+    .map(d => ({
+      time: d.time,
+      open: Number(d.open),
+      high: Number(d.high),
+      low: Number(d.low),
+      close: Number(d.close),
+      volume: Number.isFinite(+d.volume) ? +d.volume : null,
+    }))
+    .sort((a, b) => (a.time > b.time ? 1 : a.time < b.time ? -1 : 0));
+
+  const unique = new Map();
+  rows.forEach(d => unique.set(timeKey(d.time), d));
+  return [...unique.values()];
 }
 function safeLineData(arr) {
   return arr.filter(d => d != null && Number.isFinite(d.value));
@@ -85,22 +161,20 @@ function safeHistData(arr) {
 
 const BASE_OPTS = {
   layout: {
-    background: { type: 'solid', color: 'transparent' },
+    background: { type: 'solid', color: '#f7f9fc' },
     textColor: '#374151',
     attributionLogo: false,
   },
-  grid: { vertLines: { color: '#f0f2f5' }, horzLines: { color: '#f0f2f5' } },
+  grid: { vertLines: { color: '#e6ebf3' }, horzLines: { color: '#e6ebf3' } },
   // ③ 마우스 휠 스크롤 줌 비활성화, 좌우 드래그만 허용
   handleScale: { mouseWheel: false, pinch: false },
   handleScroll: { pressedMouseMove: true, horzTouchDrag: true, vertTouchDrag: false, mouseWheel: false },
-  rightPriceScale: { borderColor: '#e2e5ec', minimumWidth: 70 },
+  rightPriceScale: { borderColor: '#e2e5ec', minimumWidth: PRICE_SCALE_WIDTH },
   timeScale: {
     borderColor: '#e2e5ec',
-    timeVisible: false,   // ④ 날짜만, 시간 없음
+    timeVisible: true,
     secondsVisible: false,
-    tickMarkFormatter: fmtTime,
   },
-  localization: { timeFormatter: fmtTime },
 };
 
 export default function ChartColumn({ id, defaultSymbol, defaultName }) {
@@ -117,6 +191,24 @@ export default function ChartColumn({ id, defaultSymbol, defaultName }) {
   const [limitInput, setLimitInput] = useState('120');
   const [loading,    setLoading]    = useState(false);
   const [error,      setError]      = useState('');
+  const [chartsReady, setChartsReady] = useState(false);
+  const [loadVersion, setLoadVersion] = useState(0);
+  const [mainVisible, setMainVisible] = useState({
+    candle: true,
+    ma5: true,
+    ma10: true,
+    ma20: true,
+    ma60: true,
+    ma120: true,
+  });
+  const [ichiVisible, setIchiVisible] = useState({
+    candle: true,
+    tenkan: true,
+    kijun: true,
+    chikou: true,
+    spanA: true,
+    spanB: true,
+  });
 
   // DOM refs
   const priceRef   = useRef(null);
@@ -131,6 +223,10 @@ export default function ChartColumn({ id, defaultSymbol, defaultName }) {
   const ser         = useRef({});
   const maMaps      = useRef([]);
   const macdDataRef = useRef([]);   // ③ MACD 데이터 저장
+  const crosshairValueMapsRef = useRef({ candle: new Map(), volume: new Map(), macd: new Map() });
+  const symbolRef   = useRef(symbol);
+  const timeZoneRef = useRef(symbolTimeZone(symbol));
+  const mainViewKeyRef = useRef('');
   const cloudCanvas = useRef(null);
   const syncLock    = useRef(false);
   const xhairLock   = useRef(false);
@@ -143,6 +239,38 @@ export default function ChartColumn({ id, defaultSymbol, defaultName }) {
     setError('');
     localStorage.setItem(storageKey, JSON.stringify({ symbol: sym, name }));
   }, [storageKey]);
+
+  useEffect(() => {
+    symbolRef.current = symbol;
+    timeZoneRef.current = symbolTimeZone(symbol);
+  }, [symbol]);
+
+  useEffect(() => {
+    ser.current.candle?.applyOptions({ visible: mainVisible.candle });
+    MA_PERIODS.forEach((period, idx) => {
+      ser.current.maLines?.[idx]?.applyOptions({ visible: mainVisible[`ma${period}`] });
+    });
+  }, [mainVisible]);
+
+  useEffect(() => {
+    ser.current.ichiCandle?.applyOptions({ visible: ichiVisible.candle });
+    ser.current.tenkan?.applyOptions({ visible: ichiVisible.tenkan });
+    ser.current.kijun?.applyOptions({ visible: ichiVisible.kijun });
+    ser.current.chikou?.applyOptions({ visible: ichiVisible.chikou });
+    ser.current.spanA?.applyOptions({ visible: ichiVisible.spanA });
+    ser.current.spanB?.applyOptions({ visible: ichiVisible.spanB });
+    if (cloudCanvas.current) {
+      cloudCanvas.current.style.display = ichiVisible.spanA && ichiVisible.spanB ? 'block' : 'none';
+    }
+  }, [ichiVisible]);
+
+  const toggleMainVisible = (key) => {
+    setMainVisible(prev => ({ ...prev, [key]: !prev[key] }));
+  };
+
+  const toggleIchiVisible = (key) => {
+    setIchiVisible(prev => ({ ...prev, [key]: !prev[key] }));
+  };
 
   // ③ MACD 배경색 캔버스에 그리기
   const drawMacdBackground = useCallback(() => {
@@ -173,25 +301,44 @@ export default function ChartColumn({ id, defaultSymbol, defaultName }) {
     ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
     ctx.clearRect(0, 0, rect.width, rect.height);
 
-    // MACD 히스토그램의 부호에 따라 배경 칠하기
+    // MACD 0선 기준으로 배경 칠하기
     const ts = chart.timeScale();
-    let prevX = null, prevSign = null;
+    let prevX = null, prevFill = null;
+    let firstX = null, firstFill = null;
+    const plotRight = typeof ts.width === 'function'
+      ? ts.width()
+      : Math.max(0, rect.width - PRICE_SCALE_WIDTH);
 
     for (let i = 0; i < macdData.length; i++) {
       const d = macdData[i];
-      if (!Number.isFinite(d.histogram)) continue;
-      const sign = d.histogram >= 0 ? 1 : -1;
+      if (!Number.isFinite(d.macd)) continue;
+      const sign = d.macd >= 0 ? 1 : -1;
       const x = ts.timeToCoordinate(d.time);
-      if (x == null) { prevX = null; prevSign = null; continue; }
+      if (x == null) { prevX = null; continue; }
 
-      if (prevX !== null && prevSign === sign) {
-        ctx.fillStyle = sign > 0
-          ? 'rgba(239,83,80,0.08)'   // 양수: 투명 빨강
-          : 'rgba(21,101,192,0.08)'; // 음수: 투명 파랑
+      const fill = sign > 0
+        ? 'rgba(239,83,80,0.12)'
+        : 'rgba(21,101,192,0.12)';
+
+      if (firstX === null) {
+        firstX = x;
+        firstFill = fill;
+      }
+      if (prevX !== null) {
+        ctx.fillStyle = prevFill || fill;
         ctx.fillRect(prevX, 0, x - prevX, rect.height);
       }
       prevX = x;
-      prevSign = sign;
+      prevFill = fill;
+    }
+
+    if (firstX !== null && firstFill && firstX > 0) {
+      ctx.fillStyle = firstFill;
+      ctx.fillRect(0, 0, firstX, rect.height);
+    }
+    if (prevX !== null && prevFill && plotRight > prevX) {
+      ctx.fillStyle = prevFill;
+      ctx.fillRect(prevX, 0, plotRight - prevX, rect.height);
     }
   }, []);
 
@@ -202,24 +349,42 @@ export default function ChartColumn({ id, defaultSymbol, defaultName }) {
     inited.current = true;
 
     const w = (ref) => ref.current?.clientWidth || 400;
-
-    const pc = createChart(priceRef.current, {
+    const chartOptions = {
       ...BASE_OPTS,
+      timeScale: {
+        ...BASE_OPTS.timeScale,
+        tickMarkFormatter: (time) => formatAxisTime(time, timeZoneRef.current),
+      },
+      localization: {
+        timeFormatter: (time) => formatAxisTime(time, timeZoneRef.current),
+        priceFormatter: (price) => formatPriceLabel(price, symbolRef.current),
+      },
+    };
+    const pc = createChart(priceRef.current, {
+      ...chartOptions,
       crosshair: { mode: CrosshairMode.Normal },
       height: 300, width: w(priceRef),
     });
     const vc = createChart(volumeRef.current, {
-      ...BASE_OPTS,
+      ...chartOptions,
+      localization: {
+        ...chartOptions.localization,
+        priceFormatter: formatVolumeLabel,
+      },
       crosshair: { mode: CrosshairMode.Normal, horzLine: { visible: false, labelVisible: false } },
-      height: 90, width: w(volumeRef),
+      height: 120, width: w(volumeRef),
     });
     const mc = createChart(macdRef.current, {
-      ...BASE_OPTS,
+      ...chartOptions,
+      localization: {
+        ...chartOptions.localization,
+        priceFormatter: formatNumberNoDecimals,
+      },
       crosshair: { mode: CrosshairMode.Normal, horzLine: { visible: false, labelVisible: false } },
       height: 130, width: w(macdRef),
     });
     const ic = createChart(ichiRef.current, {
-      ...BASE_OPTS,
+      ...chartOptions,
       crosshair: { mode: CrosshairMode.Normal },
       height: 240, width: w(ichiRef),
     });
@@ -232,6 +397,7 @@ export default function ChartColumn({ id, defaultSymbol, defaultName }) {
       upColor: '#ef5350', downColor: '#1565c0',
       borderVisible: false,
       wickUpColor: '#ef5350', wickDownColor: '#1565c0',
+      priceFormat: { type: 'custom', formatter: (price) => formatPriceLabel(price, symbolRef.current) },
       ...NO_PRICE_LINE,
     });
 
@@ -240,30 +406,44 @@ export default function ChartColumn({ id, defaultSymbol, defaultName }) {
       pc.addSeries(LineSeries, {
         color: MA_COLORS[idx], lineWidth: 1,
         crosshairMarkerVisible: false,
+        priceFormat: { type: 'custom', formatter: (price) => formatPriceLabel(price, symbolRef.current) },
         ...NO_PRICE_LINE,
       })
     );
 
     ser.current.vol = vc.addSeries(HistogramSeries, {
-      color: '#ef5350', priceFormat: { type: 'volume' }, priceScaleId: 'vol',
+      color: '#ef5350',
+      priceFormat: { type: 'custom', formatter: formatVolumeLabel },
+      priceScaleId: 'right',
     });
-    vc.priceScale('vol').applyOptions({ scaleMargins: { top: 0.1, bottom: 0 } });
+    vc.priceScale('right').applyOptions({
+      scaleMargins: { top: 0.1, bottom: 0 },
+      minimumWidth: PRICE_SCALE_WIDTH,
+    });
 
-    ser.current.macdHist = mc.addSeries(HistogramSeries, { color: '#26a69a', ...NO_PRICE_LINE });
-    ser.current.macdLine = mc.addSeries(LineSeries, { color: '#2962ff', lineWidth: 1, ...NO_PRICE_LINE });
-    ser.current.signal   = mc.addSeries(LineSeries, { color: '#ff6d00', lineWidth: 1, ...NO_PRICE_LINE });
+    const macdPriceFormat = { type: 'custom', formatter: formatNumberNoDecimals };
+    ser.current.macdHist = mc.addSeries(HistogramSeries, { color: '#26a69a', priceFormat: macdPriceFormat, ...NO_PRICE_LINE });
+    ser.current.macdLine = mc.addSeries(LineSeries, { color: '#2962ff', lineWidth: 1, priceFormat: macdPriceFormat, ...NO_PRICE_LINE });
+    ser.current.signal   = mc.addSeries(LineSeries, { color: '#ff6d00', lineWidth: 1, priceFormat: macdPriceFormat, ...NO_PRICE_LINE });
 
     ser.current.ichiCandle = ic.addSeries(CandlestickSeries, {
       upColor: '#ef5350', downColor: '#1565c0',
       borderVisible: false,
       wickUpColor: '#ef5350', wickDownColor: '#1565c0',
+      priceFormat: { type: 'custom', formatter: (price) => formatPriceLabel(price, symbolRef.current) },
       ...NO_PRICE_LINE,
     });
-    ser.current.tenkan = ic.addSeries(LineSeries, { color: '#e53935', lineWidth: 1, ...NO_PRICE_LINE });
-    ser.current.kijun  = ic.addSeries(LineSeries, { color: '#1565c0', lineWidth: 1, ...NO_PRICE_LINE });
-    ser.current.chikou = ic.addSeries(LineSeries, { color: '#9c27b0', lineWidth: 1, ...NO_PRICE_LINE });
-    ser.current.spanA  = ic.addSeries(LineSeries, { color: '#43a047', lineWidth: 1, lineStyle: 2, ...NO_PRICE_LINE });
-    ser.current.spanB  = ic.addSeries(LineSeries, { color: '#e53935', lineWidth: 1, lineStyle: 2, ...NO_PRICE_LINE });
+    const priceFormat = { type: 'custom', formatter: (price) => formatPriceLabel(price, symbolRef.current) };
+    ser.current.tenkan = ic.addSeries(LineSeries, { color: '#e53935', lineWidth: 1, priceFormat, ...NO_PRICE_LINE });
+    ser.current.kijun  = ic.addSeries(LineSeries, { color: '#1565c0', lineWidth: 1, priceFormat, ...NO_PRICE_LINE });
+    ser.current.chikou = ic.addSeries(LineSeries, { color: '#9c27b0', lineWidth: 1, priceFormat, ...NO_PRICE_LINE });
+    ser.current.spanA  = ic.addSeries(LineSeries, { color: '#43a047', lineWidth: 1, lineStyle: 2, priceFormat, ...NO_PRICE_LINE });
+    ser.current.spanB  = ic.addSeries(LineSeries, { color: '#e53935', lineWidth: 1, lineStyle: 2, priceFormat, ...NO_PRICE_LINE });
+    [pc, vc, mc, ic].forEach(chart => {
+      chart.priceScale('right').applyOptions({ minimumWidth: PRICE_SCALE_WIDTH });
+    });
+    setChartsReady(true);
+    setTimeout(() => setLoadVersion(v => v + 1), 0);
 
     // ⑧ 타임스케일 동기화 (양방향: price↔volume↔macd)
     const triCharts = [pc, vc, mc];
@@ -280,9 +460,9 @@ export default function ChartColumn({ id, defaultSymbol, defaultName }) {
 
     // ⑦ 크로스헤어 동기화 (price, volume, macd)
     const mainTrio = [
-      { c: pc, s: () => ser.current.candle },
-      { c: vc, s: () => ser.current.vol },
-      { c: mc, s: () => ser.current.macdHist },
+      { c: pc, s: () => ser.current.candle, key: 'candle' },
+      { c: vc, s: () => ser.current.vol, key: 'volume' },
+      { c: mc, s: () => ser.current.macdHist, key: 'macd' },
     ];
 
     mainTrio.forEach(({ c: chart }, i) => {
@@ -302,19 +482,19 @@ export default function ChartColumn({ id, defaultSymbol, defaultName }) {
                 const maRows = MA_PERIODS.map((p, idx) => {
                   const val = maMaps.current[idx]?.get(tk);
                   return val != null
-                    ? `<span class="tt-ma" style="color:${MA_COLORS[idx]}">MA${p} <b>${Number(val).toLocaleString('ko-KR')}</b></span>`
+                    ? `<span class="tt-ma" style="color:${MA_COLORS[idx]}">MA${p} <b>${formatPriceLabel(val, symbolRef.current)}</b></span>`
                     : '';
                 }).join('');
 
                 tip.innerHTML =
-                  `<div class="tt-date">${fmtTime(param.time)}</div>` +
+                  `<div class="tt-date">${formatTooltipTime(param.time, timeZoneRef.current)}</div>` +
                   `<div class="tt-row" style="color:${color}">` +
-                  `<span>시가 <b>${Number(data.open).toLocaleString('ko-KR')}</b></span>` +
-                  `<span>종가 <b>${Number(data.close).toLocaleString('ko-KR')}</b></span>` +
+                  `<span>시가 <b>${formatPriceLabel(data.open, symbolRef.current)}</b></span>` +
+                  `<span>종가 <b>${formatPriceLabel(data.close, symbolRef.current)}</b></span>` +
                   `</div>` +
                   `<div class="tt-row tt-gray">` +
-                  `<span>고가 ${Number(data.high).toLocaleString('ko-KR')}</span>` +
-                  `<span>저가 ${Number(data.low).toLocaleString('ko-KR')}</span>` +
+                  `<span>고가 ${formatPriceLabel(data.high, symbolRef.current)}</span>` +
+                  `<span>저가 ${formatPriceLabel(data.low, symbolRef.current)}</span>` +
                   `</div>` +
                   (maRows ? `<div class="tt-ma-row">${maRows}</div>` : '');
 
@@ -332,13 +512,15 @@ export default function ChartColumn({ id, defaultSymbol, defaultName }) {
         // ② 크로스헤어 동기화 (Value is null 방지: try-catch)
         if (xhairLock.current) return;
         xhairLock.current = true;
-        mainTrio.forEach(({ c: other, s }, j) => {
+        mainTrio.forEach(({ c: other, s, key }, j) => {
           if (j === i) return;
           const series = s();
           if (!series) return;
           try {
-            if (param.time) {
-              other.setCrosshairPosition(0, param.time, series);
+            const tk = param.time ? timeKey(param.time) : null;
+            const value = tk ? crosshairValueMapsRef.current[key]?.get(tk) : null;
+            if (param.time && Number.isFinite(value)) {
+              other.setCrosshairPosition(value, param.time, series);
             } else {
               other.clearCrosshairPosition();
             }
@@ -426,7 +608,8 @@ export default function ChartColumn({ id, defaultSymbol, defaultName }) {
   // ─── 메인 3개 차트 데이터 로드 ───────────────────────
   const fetchMain = useCallback(async (sym, tf, lim) => {
     if (!sym || !ser.current.candle) return;
-    const r    = await fetch(`/api/ohlcv?symbol=${encodeURIComponent(sym)}&interval=${tf.interval}&limit=${lim}`);
+    const viewKey = `${sym}:${tf.interval}:${lim}`;
+    const r    = await fetch(`/api/ohlcv?symbol=${encodeURIComponent(sym)}&interval=${tf.interval}&limit=${requestLimit(tf, lim)}`);
     const contentType = r.headers.get('content-type') || '';
     if (!r.ok) {
       const body = contentType.includes('application/json') ? await r.json().catch(() => null) : await r.text();
@@ -436,11 +619,21 @@ export default function ChartColumn({ id, defaultSymbol, defaultName }) {
       throw new Error('시세 API가 JSON 대신 HTML을 반환했습니다. 배포 API 연결을 확인하세요.');
     }
     const data = await r.json();
-    if (!Array.isArray(data) || !data.length) return;
+    if (!Array.isArray(data) || !data.length) {
+      ser.current.candle.setData([]);
+      ser.current.vol.setData([]);
+      ser.current.macdHist.setData([]);
+      ser.current.macdLine.setData([]);
+      ser.current.signal.setData([]);
+      crosshairValueMapsRef.current = { candle: new Map(), volume: new Map(), macd: new Map() };
+      return;
+    }
 
     // ② null 값 필터링
-    const candles = safeCandleData(data);
+    const candles = normalizeCandleData(data);
+    if (!candles.length) throw new Error('시세 데이터가 비어 있습니다.');
     ser.current.candle.setData(candles);
+    crosshairValueMapsRef.current.candle = new Map(candles.map(d => [timeKey(d.time), d.close]));
 
     // MA 계산 및 팝업용 맵 저장
     maMaps.current = MA_PERIODS.map((period, idx) => {
@@ -453,22 +646,41 @@ export default function ChartColumn({ id, defaultSymbol, defaultName }) {
     const volData = candles
       .filter(d => d.volume != null && Number.isFinite(+d.volume))
       .map(d => ({ time: d.time, value: +d.volume, color: d.close >= d.open ? '#ef5350' : '#1565c0' }));
-    ser.current.vol.setData(volData);
+    ser.current.vol.setData(volData.filter(d => Number.isFinite(d.value)));
+    crosshairValueMapsRef.current.volume = new Map(volData.map(d => [timeKey(d.time), d.value]));
 
     // MACD
     const macd = calculateMACD(candles);
     macdDataRef.current = macd;
-    ser.current.macdHist.setData(safeHistData(macd.filter(d => Number.isFinite(d.histogram)).map(d => ({ time: d.time, value: d.histogram, color: d.color }))));
+    const macdHistData = safeHistData(
+      macd
+        .filter(d => Number.isFinite(d.histogram))
+        .map(d => ({
+          time: d.time,
+          value: d.histogram,
+          color: d.histogram >= 0 ? '#ef5350' : '#1565c0',
+        }))
+    );
+    ser.current.macdHist.setData(macdHistData);
+    crosshairValueMapsRef.current.macd = new Map(macdHistData.map(d => [timeKey(d.time), d.value]));
     ser.current.macdLine.setData(safeLineData(macd.filter(d => Number.isFinite(d.macd   )).map(d => ({ time: d.time, value: d.macd    }))));
     ser.current.signal.setData(  safeLineData(macd.filter(d => Number.isFinite(d.signal )).map(d => ({ time: d.time, value: d.signal  }))));
 
     // ③ MACD 배경 그리기 (약간 지연 → 차트 렌더 후)
-    requestAnimationFrame(() => drawMacdBackground());
+    requestAnimationFrame(() => {
+      if (mainViewKeyRef.current !== viewKey) {
+        [charts.current.price, charts.current.volume, charts.current.macd].forEach(chart => {
+          try { chart?.timeScale().fitContent(); } catch (e) { console.warn('fitContent skipped:', e); }
+        });
+        mainViewKeyRef.current = viewKey;
+      }
+      drawMacdBackground();
+    });
   }, [drawMacdBackground]);
 
   const fetchIchi = useCallback(async (sym, tf, lim) => {
     if (!sym || !ser.current.ichiCandle) return;
-    const r    = await fetch(`/api/ohlcv?symbol=${encodeURIComponent(sym)}&interval=${tf.interval}&limit=${lim}`);
+    const r    = await fetch(`/api/ohlcv?symbol=${encodeURIComponent(sym)}&interval=${tf.interval}&limit=${requestLimit(tf, lim)}`);
     const contentType = r.headers.get('content-type') || '';
     if (!r.ok) {
       const body = contentType.includes('application/json') ? await r.json().catch(() => null) : await r.text();
@@ -478,18 +690,27 @@ export default function ChartColumn({ id, defaultSymbol, defaultName }) {
       throw new Error('시세 API가 JSON 대신 HTML을 반환했습니다. 배포 API 연결을 확인하세요.');
     }
     const data = await r.json();
-    if (!Array.isArray(data) || !data.length) return;
+    if (!Array.isArray(data) || !data.length) {
+      ser.current.ichiCandle.setData([]);
+      ser.current.tenkan.setData([]);
+      ser.current.kijun.setData([]);
+      ser.current.chikou.setData([]);
+      ser.current.spanA.setData([]);
+      ser.current.spanB.setData([]);
+      return;
+    }
 
-    const candles = safeCandleData(data);
+    const candles = normalizeCandleData(data);
+    if (!candles.length) throw new Error('일목균형표 데이터가 비어 있습니다.');
     ser.current.ichiCandle.setData(candles);
     const ichi = calculateIchimoku(candles);
 
-    const spanAData = ichi.map((d, i) => ({ time: candles[i].time, value: d.senkouA }));
-    const spanBData = ichi.map((d, i) => ({ time: candles[i].time, value: d.senkouB }));
+    const spanAData = ichi.map((d, i) => ({ time: candles[i]?.time, value: d.senkouA })).filter(d => d.time != null);
+    const spanBData = ichi.map((d, i) => ({ time: candles[i]?.time, value: d.senkouB })).filter(d => d.time != null);
 
-    ser.current.tenkan.setData(safeLineData(ichi.map((d, i) => ({ time: candles[i].time, value: d.tenkan }))));
-    ser.current.kijun.setData( safeLineData(ichi.map((d, i) => ({ time: candles[i].time, value: d.kijun  }))));
-    ser.current.chikou.setData(safeLineData(ichi.map((d, i) => ({ time: candles[i].time, value: d.chikou }))));
+    ser.current.tenkan.setData(safeLineData(ichi.map((d, i) => ({ time: candles[i]?.time, value: d.tenkan })).filter(d => d.time != null)));
+    ser.current.kijun.setData( safeLineData(ichi.map((d, i) => ({ time: candles[i]?.time, value: d.kijun  })).filter(d => d.time != null)));
+    ser.current.chikou.setData(safeLineData(ichi.map((d, i) => ({ time: candles[i]?.time, value: d.chikou })).filter(d => d.time != null)));
     ser.current.spanA.setData( safeLineData(spanAData));
     ser.current.spanB.setData( safeLineData(spanBData));
     drawCloud(spanAData, spanBData);
@@ -503,39 +724,54 @@ export default function ChartColumn({ id, defaultSymbol, defaultName }) {
       setLoading(true);
     }, 0);
     Promise.all([
-      fetchMain(symbol, mainTf, limit).catch(e => setError(e.message)),
+      fetchMain(symbol, mainTf, limit).catch(e => {
+        if (!String(e.message || '').includes('Value is null')) setError(e.message);
+      }),
       fetchIchi(symbol, ichiTf, limit + 80).catch(() => {}),
     ]).finally(() => {
       clearTimeout(timer);
       setLoading(false);
     });
     return () => clearTimeout(timer);
-  }, [symbol, mainTf, ichiTf, limit, fetchMain, fetchIchi]);
+  }, [symbol, mainTf, ichiTf, limit, loadVersion, fetchMain, fetchIchi]);
+
+  useEffect(() => {
+    if (!charts.current.price) return;
+    const intraMain = isIntradayTf(mainTf);
+    const intraIchi = isIntradayTf(ichiTf);
+    charts.current.price.applyOptions({ timeScale: { timeVisible: intraMain } });
+    charts.current.volume.applyOptions({ timeScale: { timeVisible: intraMain } });
+    charts.current.macd.applyOptions({ timeScale: { timeVisible: intraMain } });
+    charts.current.ichi.applyOptions({ timeScale: { timeVisible: intraIchi } });
+  }, [mainTf, ichiTf]);
 
   // ⑧ 실시간 업데이트: 분봉 1초, 일봉 5초
   useEffect(() => {
-    if (!symbol) return;
+    if (!symbol || !chartsReady) return;
     const isIntra = INTRA_INTERVALS.includes(mainTf.interval);
     const ms = isIntra ? 1000 : 5000;
     const t = setInterval(() => {
       if (isMarketOpen()) fetchMain(symbol, mainTf, limit).catch(() => {});
     }, ms);
     return () => clearInterval(t);
-  }, [symbol, mainTf, limit, fetchMain]);
+  }, [symbol, mainTf, limit, chartsReady, fetchMain]);
 
   useEffect(() => {
-    if (!symbol) return;
+    if (!symbol || !chartsReady) return;
     const isIntra = INTRA_INTERVALS.includes(ichiTf.interval);
     const ms = isIntra ? 1000 : 5000;
     const t = setInterval(() => {
       if (isMarketOpen()) fetchIchi(symbol, ichiTf, limit + 80).catch(() => {});
     }, ms);
     return () => clearInterval(t);
-  }, [symbol, ichiTf, limit, fetchIchi]);
+  }, [symbol, ichiTf, limit, chartsReady, fetchIchi]);
 
   const applyLimit = () => {
     const n = parseInt(limitInput, 10);
-    if (n > 0 && n <= 2000) setLimit(n);
+    if (n > 0 && n <= 2000) {
+      setLimit(n);
+      setLimitInput(String(n));
+    }
   };
 
   // ─── Render ──────────────────────────────────────────
@@ -580,10 +816,24 @@ export default function ChartColumn({ id, defaultSymbol, defaultName }) {
         </div>
       </div>
 
-      {/* MA 범례 */}
       <div className="ma-legend">
+        <button
+          type="button"
+          className={`legend-btn${mainVisible.candle ? '' : ' muted'}`}
+          onClick={() => toggleMainVisible('candle')}
+        >
+          <span className="legend-swatch candle" />캔들
+        </button>
         {MA_PERIODS.map((p, i) => (
-          <span key={p} className="ma-legend-item" style={{ color: MA_COLORS[i] }}>MA{p}</span>
+          <button
+            key={p}
+            type="button"
+            className={`legend-btn${mainVisible[`ma${p}`] ? '' : ' muted'}`}
+            onClick={() => toggleMainVisible(`ma${p}`)}
+            style={{ color: MA_COLORS[i] }}
+          >
+            <span className="legend-swatch" style={{ backgroundColor: MA_COLORS[i] }} />{p}
+          </button>
         ))}
       </div>
 
@@ -621,6 +871,27 @@ export default function ChartColumn({ id, defaultSymbol, defaultName }) {
               </button>
             ))}
           </div>
+        </div>
+
+        <div className="ma-legend ichi-legend">
+          {[
+            ['candle', '캔들', '#ef5350'],
+            ['kijun', '기준선', '#1565c0'],
+            ['tenkan', '전환선', '#e53935'],
+            ['chikou', '후행선', '#9c27b0'],
+            ['spanA', '선행1', '#43a047'],
+            ['spanB', '선행2', '#e53935'],
+          ].map(([key, label, color]) => (
+            <button
+              key={key}
+              type="button"
+              className={`legend-btn${ichiVisible[key] ? '' : ' muted'}`}
+              onClick={() => toggleIchiVisible(key)}
+              style={{ color }}
+            >
+              <span className="legend-swatch" style={{ backgroundColor: color }} />{label}
+            </button>
+          ))}
         </div>
 
         <div className="chart-section last">

@@ -187,14 +187,47 @@ html, body {
 /* ── MA LEGEND ── */
 .ma-legend {
   display: flex;
-  gap: 10px;
+  gap: 8px;
   padding: 4px 12px;
   background: var(--panel2);
   border-bottom: 1px solid var(--border);
+  flex-wrap: wrap;
+  align-items: center;
 }
-.ma-legend-item {
+.legend-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  background: transparent;
+  border: 0;
+  color: var(--text);
+  cursor: pointer;
+  font-family: inherit;
   font-size: 11px;
   font-weight: 500;
+  line-height: 1.2;
+  padding: 2px 0;
+}
+.legend-btn.muted {
+  color: #9ca3af !important;
+  opacity: .55;
+  text-decoration: line-through;
+}
+.legend-swatch {
+  width: 9px;
+  height: 3px;
+  border-radius: 999px;
+  display: inline-block;
+}
+.legend-swatch.candle {
+  width: 8px;
+  height: 8px;
+  border-radius: 2px;
+  background: linear-gradient(90deg, var(--up) 0 50%, var(--dn) 50% 100%);
+}
+.ichi-legend {
+  padding-top: 3px;
+  padding-bottom: 3px;
 }
 
 /* ── CHARTS AREA ── */
