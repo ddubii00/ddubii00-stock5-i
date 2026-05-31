@@ -804,9 +804,11 @@ export default function ChartColumn({ id, defaultSymbol, defaultName }) {
     requestAnimationFrame(() => {
       if (ichiViewKeyRef.current !== viewKey) {
         try {
-          charts.current.ichi?.timeScale().setVisibleLogicalRange({
-            from: Math.max(0, candles.length - visibleCount),
-            to: Math.max(0, candles.length - 1 + ICHIMOKU_DISPLACEMENT),
+          const fromTime = candles[Math.max(0, candles.length - visibleCount)]?.time;
+          const toTime = projectTime(candles[candles.length - 1]?.time, tf.interval, ICHIMOKU_DISPLACEMENT);
+          charts.current.ichi?.timeScale().setVisibleRange({
+            from: fromTime,
+            to: toTime,
           });
         } catch (e) {
           console.warn('Ichi visible range sync skipped:', e);
