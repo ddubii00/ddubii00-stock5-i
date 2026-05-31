@@ -32,6 +32,7 @@ const ICHI_TFS = [
   { label: '주',   interval: 'week' },
   { label: '월',   interval: 'month' },
 ];
+const DEFAULT_ICHI_TF = ICHI_TFS.find(tf => tf.interval === 'day') || ICHI_TFS[0];
 
 const MA_PERIODS = [5, 10, 20, 60, 120];
 const MA_COLORS  = ['#f59e0b', '#22c55e', '#a855f7', '#06b6d4', '#64748b'];
@@ -261,7 +262,7 @@ export default function ChartColumn({ id, defaultSymbol, defaultName }) {
   const [symbol,     setSymbol]     = useState(stored?.symbol || defaultSymbol || null);
   const [symbolName, setSymbolName] = useState(stored?.name   || defaultName   || '');
   const [mainTf,     setMainTf]     = useState(MAIN_TFS[6]);   // 일봉 default
-  const [ichiTf,     setIchiTf]     = useState(ICHI_TFS[5]);   // 일봉 default
+  const [ichiTf,     setIchiTf]     = useState(DEFAULT_ICHI_TF); // 일봉 default
   const [limit,      setLimit]      = useState(120);
   const [limitInput, setLimitInput] = useState('120');
   const [ichiLimit,  setIchiLimit]  = useState(120);
