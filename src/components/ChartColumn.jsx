@@ -150,6 +150,17 @@ function projectTime(time, interval, bars) {
   return projected.toISOString().slice(0, 10);
 }
 
+function ichimokuSpanBValue(candles, idx, period = 52) {
+  if (idx < period - 1) return null;
+  let high = -Infinity;
+  let low = Infinity;
+  for (let i = idx - period + 1; i <= idx; i++) {
+    high = Math.max(high, candles[i].high);
+    low = Math.min(low, candles[i].low);
+  }
+  return Number.isFinite(high) && Number.isFinite(low) ? (high + low) / 2 : null;
+}
+
 function isMarketOpen() {
   const now = new Date();
   const day = now.getUTCDay();
@@ -770,25 +781,23 @@ export default function ChartColumn({ id, defaultSymbol, defaultName }) {
     ser.current.ichiCandle.setData(candles);
     const ichi = calculateIchimoku(candles);
     const visibleCount = Math.min(Math.max(Number(lim) || ichiLimit, 1), candles.length);
-    const visibleCandles = candles.slice(-visibleCount);
-    const visibleIchi = ichi.slice(-visibleCount);
 
-    const spanAData = visibleIchi
-      .map((d, i) => d.senkouA != null ? ({
-        time: projectTime(visibleCandles[i]?.time, tf.interval, ICHIMOKU_DISPLACEMENT),
-        value: d.senkouA,
+    const spanAData = ichi
+      .map((d, i) => d.tenkan != null && d.kijun != null ? ({
+        time: projectTime(candles[i]?.time, tf.interval, ICHIMOKU_DISPLACEMENT),
+        value: (d.tenkan + d.kijun) / 2,
       }) : null)
       .filter(d => d?.time != null);
-    const spanBData = visibleIchi
-      .map((d, i) => d.senkouB != null ? ({
-        time: projectTime(visibleCandles[i]?.time, tf.interval, ICHIMOKU_DISPLACEMENT),
-        value: d.senkouB,
-      }) : null)
+    const spanBData = candles
+      .map((d, i) => ({
+        time: projectTime(d.time, tf.interval, ICHIMOKU_DISPLACEMENT),
+        value: ichimokuSpanBValue(candles, i),
+      }))
       .filter(d => d?.time != null);
 
-    ser.current.tenkan.setData(safeLineData(visibleIchi.map((d, i) => ({ time: visibleCandles[i]?.time, value: d.tenkan })).filter(d => d.time != null)));
-    ser.current.kijun.setData( safeLineData(visibleIchi.map((d, i) => ({ time: visibleCandles[i]?.time, value: d.kijun  })).filter(d => d.time != null)));
-    ser.current.chikou.setData(safeLineData(visibleIchi.map((d, i) => ({ time: visibleCandles[i]?.time, value: d.chikou })).filter(d => d.time != null)));
+    ser.current.tenkan.setData(safeLineData(ichi.map((d, i) => ({ time: candles[i]?.time, value: d.tenkan })).filter(d => d.time != null)));
+    ser.current.kijun.setData( safeLineData(ichi.map((d, i) => ({ time: candles[i]?.time, value: d.kijun  })).filter(d => d.time != null)));
+    ser.current.chikou.setData(safeLineData(ichi.map((d, i) => ({ time: candles[i]?.time, value: d.chikou })).filter(d => d.time != null)));
     ser.current.spanA.setData( safeLineData(spanAData));
     ser.current.spanB.setData( safeLineData(spanBData));
     const viewKey = `${sym}:${tf.interval}:${visibleCount}`;
