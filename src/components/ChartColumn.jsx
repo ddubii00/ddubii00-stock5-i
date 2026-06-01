@@ -96,6 +96,14 @@ function isRegularMarketOpen(symbol) {
   return minutes >= 9 * 60 + 30 && minutes <= 16 * 60;
 }
 
+function isMarketUpdateWindow(symbol) {
+  const korean = isKoreanMarketSymbol(symbol);
+  const { weekday, minutes } = marketClock(symbolTimeZone(symbol));
+  if (weekday === 'Sat' || weekday === 'Sun') return false;
+  if (korean) return minutes >= 9 * 60 && minutes <= 15 * 60 + 31;
+  return minutes >= 9 * 60 + 30 && minutes <= 16 * 60;
+}
+
 function marketStateLabel(symbol) {
   return isRegularMarketOpen(symbol) ? '실시간' : '종가';
 }
@@ -518,15 +526,6 @@ function ichimokuSpanBValue(candles, idx, period = 52) {
     low = Math.min(low, candles[i].low);
   }
   return Number.isFinite(high) && Number.isFinite(low) ? (high + low) / 2 : null;
-}
-
-function isMarketOpen() {
-  const now = new Date();
-  const day = now.getUTCDay();
-  if (day === 0 || day === 6) return false;
-  const m = now.getUTCHours() * 60 + now.getUTCMinutes();
-  // KRX 00:00-06:30 UTC / NYSE 14:30-21:00 UTC
-  return (m >= 0 && m <= 390) || (m >= 870 && m <= 1260);
 }
 
 /** ② "Value is null" 방지: lightweight-charts에 null/중복/시간 없는 캔들 전달 금지 */
@@ -1515,9 +1514,9 @@ export default function ChartColumn({ id, defaultSymbol, defaultName }) {
     updateQuote();
     let timer = null;
 
-    if (isRegularMarketOpen(symbol)) {
+    if (isMarketUpdateWindow(symbol)) {
       timer = setInterval(() => {
-        if (!isRegularMarketOpen(symbol)) {
+        if (!isMarketUpdateWindow(symbol)) {
           clearInterval(timer);
           timer = null;
           return;
@@ -1538,7 +1537,7 @@ export default function ChartColumn({ id, defaultSymbol, defaultName }) {
     const isIntra = INTRA_INTERVALS.includes(mainTf.interval);
     const ms = isIntra ? 3000 : 5000;
     const t = setInterval(() => {
-      if (isMarketOpen()) fetchMain(symbol, mainTf, limit, { followLatest: isIntra }).catch(() => {});
+      if (isMarketUpdateWindow(symbol)) fetchMain(symbol, mainTf, limit, { followLatest: isIntra }).catch(() => {});
     }, ms);
     return () => clearInterval(t);
   }, [symbol, mainTf, limit, chartsReady, fetchMain]);
@@ -1548,7 +1547,7 @@ export default function ChartColumn({ id, defaultSymbol, defaultName }) {
     const isIntra = INTRA_INTERVALS.includes(ichiTf.interval);
     const ms = isIntra ? 3000 : 5000;
     const t = setInterval(() => {
-      if (isMarketOpen()) fetchIchi(symbol, ichiTf, ichiLimit).catch(() => {});
+      if (isMarketUpdateWindow(symbol)) fetchIchi(symbol, ichiTf, ichiLimit).catch(() => {});
     }, ms);
     return () => clearInterval(t);
   }, [symbol, ichiTf, ichiLimit, chartsReady, fetchIchi]);

@@ -67,9 +67,9 @@ function isWeekday(weekday) {
   return weekday !== 'Sat' && weekday !== 'Sun';
 }
 
-function isKrxOpen() {
+function isKrxUpdateWindow() {
   const { weekday, minutes } = timeParts('Asia/Seoul');
-  return isWeekday(weekday) && minutes >= 9 * 60 && minutes <= 15 * 60 + 30;
+  return isWeekday(weekday) && minutes >= 9 * 60 && minutes <= 15 * 60 + 31;
 }
 
 function isUsOpen() {
@@ -110,9 +110,9 @@ function App() {
     update();
     let timer = null;
 
-    if (isKrxOpen() || isUsOpen()) {
+    if (isKrxUpdateWindow() || isUsOpen()) {
       timer = setInterval(() => {
-        if (!isKrxOpen() && !isUsOpen()) {
+        if (!isKrxUpdateWindow() && !isUsOpen()) {
           clearInterval(timer);
           timer = null;
           return;
