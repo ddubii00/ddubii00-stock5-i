@@ -64,7 +64,7 @@ export const INDEX_MAP = {
 
 export function parseNumeric(text) {
   const s = String(text || '').replace(/,/g, '').trim();
-  if (!s || /^N\/?[AD]$/i.test(s)) return null;
+  if (!s || /^N\/?[AD]$/i.test(s) || /^null$/i.test(s)) return null;
   const v = Number(s.replace(/[^\d.+-]/g, ''));
   return Number.isFinite(v) ? v : null;
 }
@@ -96,10 +96,114 @@ function filterKrxRegularMinutes(rows) {
   });
 }
 
+const KRX_INTRADAY_MINUTES = {
+  '1m': 1,
+  '3m': 3,
+  '5m': 5,
+  '15m': 15,
+  '30m': 30,
+  '60m': 60,
+  '1h': 60,
+};
+
+function kstMinuteTimeToSeconds(value) {
+  const text = String(value || '');
+  const match = text.match(/^(\d{4})(\d{2})(\d{2})(\d{2})(\d{2})$/);
+  if (!match) return null;
+  const [, y, mo, d, h, mi] = match.map(Number);
+  return Math.floor(Date.UTC(y, mo - 1, d, h - 9, mi) / 1000);
+}
+
+function kstDateBucketToSeconds(dateText, minuteOfDay) {
+  const text = String(dateText || '');
+  const match = text.match(/^(\d{4})(\d{2})(\d{2})$/);
+  if (!match) return null;
+  const [, y, mo, d] = match.map(Number);
+  const h = Math.floor(minuteOfDay / 60);
+  const mi = minuteOfDay % 60;
+  return Math.floor(Date.UTC(y, mo - 1, d, h - 9, mi) / 1000);
+}
+
+async function fetchKoreanMinuteOhlcv(code, interval, limit) {
+  const intervalMinutes = KRX_INTRADAY_MINUTES[interval] || 1;
+  const cacheKey = `krx-minute:${code}:${interval}:${limit}`;
+  const now = Date.now();
+  const cached = ohlcvCache.get(cacheKey);
+  if (cached && now - cached.ts < 3000) return cached.data;
+
+  const fetchCount = Math.min(Math.max(limit * intervalMinutes + 300, 600), 3000);
+  const url = `https://fchart.stock.naver.com/sise.nhn?symbol=${encodeURIComponent(code)}&timeframe=minute&count=${fetchCount}&requestType=0`;
+  const res = await fetch(url, {
+    headers: { 'User-Agent': 'Mozilla/5.0', 'Accept-Language': 'ko-KR,ko;q=0.9' },
+  });
+  if (!res.ok) throw new Error(`Naver minute responded ${res.status}`);
+
+  const xml = await res.text();
+  const minuteRows = [...xml.matchAll(/item data="([^"]+)"/g)]
+    .map(m => m[1].split('|'))
+    .map((p, idx, arr) => {
+      const timeText = p[0];
+      const time = kstMinuteTimeToSeconds(timeText);
+      const close = parseNumeric(p[4]);
+      const prevClose = idx > 0 ? parseNumeric(arr[idx - 1]?.[4]) : close;
+      const cumulativeVolume = parseNumeric(p[5]);
+      const prevCumulativeVolume = idx > 0 ? parseNumeric(arr[idx - 1]?.[5]) : null;
+      const volume = Number.isFinite(cumulativeVolume) && Number.isFinite(prevCumulativeVolume)
+        ? Math.max(0, cumulativeVolume - prevCumulativeVolume)
+        : cumulativeVolume;
+      if (time == null || close == null) return null;
+      const open = parseNumeric(p[1]) ?? prevClose ?? close;
+      const high = parseNumeric(p[2]) ?? Math.max(open, close);
+      const low = parseNumeric(p[3]) ?? Math.min(open, close);
+      return { time, open, high, low, close, volume };
+    })
+    .filter(Boolean);
+
+  const regularRows = filterKrxRegularMinutes(minuteRows);
+  if (intervalMinutes === 1) {
+    const data = regularRows.slice(-limit);
+    ohlcvCache.set(cacheKey, { ts: now, data });
+    return data;
+  }
+
+  const buckets = new Map();
+  const openMinute = 9 * 60;
+  regularRows.forEach((row) => {
+    const date = new Intl.DateTimeFormat('en-CA', {
+      timeZone: 'Asia/Seoul',
+      year: 'numeric',
+      month: '2-digit',
+      day: '2-digit',
+    }).format(new Date(row.time * 1000)).replaceAll('-', '');
+    const minute = krxMinuteOfDay(row.time);
+    if (minute == null) return;
+    const bucketMinute = openMinute + Math.floor((minute - openMinute) / intervalMinutes) * intervalMinutes;
+    const bucketTime = kstDateBucketToSeconds(date, bucketMinute);
+    if (bucketTime == null) return;
+    const current = buckets.get(bucketTime);
+    if (!current) {
+      buckets.set(bucketTime, { time: bucketTime, open: row.open, high: row.high, low: row.low, close: row.close, volume: row.volume });
+      return;
+    }
+    current.high = Math.max(current.high, row.high);
+    current.low = Math.min(current.low, row.low);
+    current.close = row.close;
+    current.volume = (Number(current.volume) || 0) + (Number(row.volume) || 0);
+  });
+
+  const data = [...buckets.values()].sort((a, b) => a.time - b.time).slice(-limit);
+  ohlcvCache.set(cacheKey, { ts: now, data });
+  return data;
+}
+
 export async function fetchKoreanOhlcv(code, interval, limit) {
   if (interval !== 'day') {
+    const cleanCode = code.replace(/\.(KS|KQ)$/, '');
+    const normalizedInterval = interval === '1h' ? '60m' : interval;
+    if (KRX_INTRADAY_MINUTES[normalizedInterval]) {
+      return fetchKoreanMinuteOhlcv(cleanCode, normalizedInterval, limit);
+    }
     const suffix = code.endsWith('.KS') || code.endsWith('.KQ') ? code : `${code}.KS`;
-    const normalizedInterval = interval === '3m' ? '5m' : interval;
     try {
       return filterKrxRegularMinutes(await fetchUsOhlcv(suffix, normalizedInterval, limit));
     } catch (e) {
@@ -144,7 +248,7 @@ export async function fetchUsOhlcv(symbol, interval, limit) {
   const cacheKey = `${symbol}:${interval}:${limit}`;
   const now = Date.now();
   const cached = ohlcvCache.get(cacheKey);
-  const ttl = interval === 'day' ? 3000 : ['week', 'month'].includes(interval) ? 3600000 : 300000;
+  const ttl = interval === 'day' || KRX_INTRADAY_MINUTES[interval] ? 3000 : ['week', 'month'].includes(interval) ? 3600000 : 300000;
   if (cached && now - cached.ts < ttl) return cached.data;
 
   const intervalMap = {

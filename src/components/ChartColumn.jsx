@@ -1294,7 +1294,7 @@ export default function ChartColumn({ id, defaultSymbol, defaultName }) {
   }, []);
 
   // ─── 메인 3개 차트 데이터 로드 ───────────────────────
-  const fetchMain = useCallback(async (sym, tf, lim) => {
+  const fetchMain = useCallback(async (sym, tf, lim, { followLatest = false } = {}) => {
     if (!sym || !ser.current.candle) return;
     const viewKey = `${sym}:${tf.interval}:${lim}`;
     const r    = await fetch(`/api/ohlcv?symbol=${encodeURIComponent(sym)}&interval=${tf.interval}&limit=${requestLimit(tf, lim)}`);
@@ -1370,7 +1370,7 @@ export default function ChartColumn({ id, defaultSymbol, defaultName }) {
 
     // ③ MACD 배경 그리기 (약간 지연 → 차트 렌더 후)
     requestAnimationFrame(() => {
-      if (mainViewKeyRef.current !== viewKey) {
+      if (mainViewKeyRef.current !== viewKey || followLatest) {
         const range = {
           from: Math.max(0, candles.length - lim),
           to: Math.max(0, candles.length - 1),
@@ -1532,13 +1532,13 @@ export default function ChartColumn({ id, defaultSymbol, defaultName }) {
     };
   }, [symbol, chartsReady, fetchQuote]);
 
-  // ⑧ 실시간 업데이트: 분봉 1초, 일봉 5초
+  // ⑧ 실시간 업데이트: 최신 캔들을 3초마다 따라가게 갱신
   useEffect(() => {
     if (!symbol || !chartsReady) return;
     const isIntra = INTRA_INTERVALS.includes(mainTf.interval);
-    const ms = isIntra ? 1000 : 5000;
+    const ms = isIntra ? 3000 : 5000;
     const t = setInterval(() => {
-      if (isMarketOpen()) fetchMain(symbol, mainTf, limit).catch(() => {});
+      if (isMarketOpen()) fetchMain(symbol, mainTf, limit, { followLatest: isIntra }).catch(() => {});
     }, ms);
     return () => clearInterval(t);
   }, [symbol, mainTf, limit, chartsReady, fetchMain]);
@@ -1546,7 +1546,7 @@ export default function ChartColumn({ id, defaultSymbol, defaultName }) {
   useEffect(() => {
     if (!symbol || !chartsReady) return;
     const isIntra = INTRA_INTERVALS.includes(ichiTf.interval);
-    const ms = isIntra ? 1000 : 5000;
+    const ms = isIntra ? 3000 : 5000;
     const t = setInterval(() => {
       if (isMarketOpen()) fetchIchi(symbol, ichiTf, ichiLimit).catch(() => {});
     }, ms);
