@@ -96,6 +96,10 @@ function isRegularMarketOpen(symbol) {
   return minutes >= 9 * 60 + 30 && minutes <= 16 * 60;
 }
 
+function marketStateLabel(symbol) {
+  return isRegularMarketOpen(symbol) ? '실시간' : '종가';
+}
+
 function formatNumberNoDecimals(value) {
   return Math.round(Number(value) || 0).toLocaleString('ko-KR');
 }
@@ -1645,6 +1649,7 @@ export default function ChartColumn({ id, defaultSymbol, defaultName }) {
                     ({formatSignedPercent(quote.changePct)}, {formatSignedValue(quote.change, '', isIndexSymbol(symbol) ? 2 : 0)})
                   </span>
                 )}
+                <span className="quote-state">{marketStateLabel(symbol)}</span>
               </span>
             )}
             {loading && <span className="loading-dot">●</span>}

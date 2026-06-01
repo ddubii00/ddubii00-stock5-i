@@ -211,6 +211,17 @@ html, body {
   font-size: 12px;
   font-weight: 600;
 }
+.quote-state {
+  display: inline-block;
+  margin-left: 4px;
+  padding: 1px 5px;
+  border: 1px solid currentColor;
+  border-radius: 999px;
+  font-size: 10px;
+  font-weight: 700;
+  line-height: 1.2;
+  opacity: 0.85;
+}
 .loading-dot {
   font-size: 10px;
   color: var(--accent);
