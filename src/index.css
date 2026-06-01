@@ -83,6 +83,7 @@ html, body {
   color: var(--muted);
   font-size: 13px;
   font-weight: 600;
+  font-variant-numeric: tabular-nums;
 }
 
 .market-item strong {
@@ -90,6 +91,13 @@ html, body {
   font-size: 15px;
   font-weight: 800;
   margin-left: 4px;
+}
+
+.market-price {
+  display: inline-block;
+  min-width: 10ch;
+  text-align: right;
+  font-variant-numeric: tabular-nums;
 }
 
 .market-item.up,
@@ -109,6 +117,13 @@ html, body {
 
 .market-change {
   margin-left: 4px;
+}
+
+.market-change-fixed {
+  display: inline-block;
+  min-width: 17ch;
+  text-align: left;
+  font-variant-numeric: tabular-nums;
 }
 
 /* ── GRID: 1 col mobile, 2×2 otherwise ── */

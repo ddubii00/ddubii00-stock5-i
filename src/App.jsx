@@ -137,9 +137,9 @@ function App() {
         <div className="market-summary" aria-label="시장 요약">
           {marketSummary.usdKrw && (
             <span className={`market-item ${marketSummary.usdKrw.change >= 0 ? 'up' : 'down'}`}>
-              달러/원 <strong>{formatFixed(marketSummary.usdKrw.price, 2)}</strong>
+              달러/원 <strong className="market-price">{formatFixed(marketSummary.usdKrw.price, 2)}</strong>
               {Number.isFinite(marketSummary.usdKrw.changePct) && Number.isFinite(marketSummary.usdKrw.change) && (
-                <span className="market-change">
+                <span className="market-change market-change-fixed">
                   ({formatSignedPercent(marketSummary.usdKrw.changePct)}, {formatSignedFixed(marketSummary.usdKrw.change, 2)})
                 </span>
               )}
@@ -147,9 +147,9 @@ function App() {
           )}
           {marketSummary.kospi && (
             <span className={`market-item ${marketSummary.kospi.change >= 0 ? 'up' : 'down'}`}>
-              KOSPI <strong>{formatFixed(marketSummary.kospi.price, 2)}</strong>
+              KOSPI <strong className="market-price">{formatFixed(marketSummary.kospi.price, 2)}</strong>
               {Number.isFinite(marketSummary.kospi.changePct) && Number.isFinite(marketSummary.kospi.change) && (
-                <span className="market-change">
+                <span className="market-change market-change-fixed">
                   ({formatSignedPercent(marketSummary.kospi.changePct)}, {formatSignedFixed(marketSummary.kospi.change, 2)})
                 </span>
               )}
@@ -157,9 +157,9 @@ function App() {
           )}
           {marketSummary.nasdaq && (
             <span className={`market-item ${marketSummary.nasdaq.change >= 0 ? 'up' : 'down'}`}>
-              나스닥 <strong>{formatFixed(marketSummary.nasdaq.price, 2)}</strong>
+              나스닥 <strong className="market-price">{formatFixed(marketSummary.nasdaq.price, 2)}</strong>
               {Number.isFinite(marketSummary.nasdaq.changePct) && Number.isFinite(marketSummary.nasdaq.change) && (
-                <span className="market-change">
+                <span className="market-change market-change-fixed">
                   ({formatSignedPercent(marketSummary.nasdaq.changePct)}, {formatSignedFixed(marketSummary.nasdaq.change, 2)})
                 </span>
               )}
