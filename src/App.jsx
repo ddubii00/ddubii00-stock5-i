@@ -132,7 +132,6 @@ function App() {
       <header className="app-header">
         <div className="app-heading">
           <h1 className="app-title">📈 Stock Dashboard</h1>
-          <p className="app-subtitle">한국·미국 주식 및 지수 차트 | 종목을 검색해보세요</p>
         </div>
         <div className="market-summary" aria-label="시장 요약">
           {marketSummary.usdKrw && (

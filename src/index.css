@@ -35,20 +35,21 @@ html, body {
   display: flex;
   align-items: center;
   justify-content: space-between;
-  gap: 12px;
+  gap: 8px;
   padding: 10px 20px;
   background: #fff;
   border-bottom: 1px solid var(--border);
   box-shadow: var(--shadow);
   flex-shrink: 0;
-  flex-wrap: wrap;
+  flex-wrap: nowrap;
 }
 
 .app-heading {
   display: flex;
   align-items: center;
-  gap: 12px;
-  min-width: 280px;
+  gap: 10px;
+  min-width: 0;
+  flex: 0 0 auto;
 }
 
 .app-title {
@@ -60,23 +61,23 @@ html, body {
   background-clip: text;
 }
 
-.app-subtitle { font-size: 12px; color: var(--muted); }
-
 .market-summary {
   display: flex;
   align-items: baseline;
   justify-content: flex-end;
-  gap: 10px;
+  gap: 8px;
   margin-left: auto;
   text-align: right;
   white-space: nowrap;
+  min-width: 0;
+  flex: 1 1 auto;
 }
 
 .market-item + .market-item::before {
   color: #111827;
   content: '|';
   display: inline-block;
-  margin: 0 10px 0 0;
+  margin: 0 6px 0 0;
 }
 
 .market-item {
@@ -90,12 +91,12 @@ html, body {
   color: var(--text);
   font-size: 15px;
   font-weight: 800;
-  margin-left: 4px;
+  margin-left: 2px;
 }
 
 .market-price {
   display: inline-block;
-  min-width: 10ch;
+  min-width: 11ch;
   text-align: right;
   font-variant-numeric: tabular-nums;
 }
@@ -116,14 +117,25 @@ html, body {
 }
 
 .market-change {
-  margin-left: 4px;
+  margin-left: 2px;
 }
 
 .market-change-fixed {
   display: inline-block;
-  min-width: 17ch;
+  min-width: 16ch;
   text-align: left;
   font-variant-numeric: tabular-nums;
+}
+
+@media (max-width: 1024px) {
+  .app-header {
+    flex-wrap: wrap;
+  }
+
+  .market-summary {
+    width: 100%;
+    justify-content: flex-start;
+  }
 }
 
 /* ── GRID: 1 col mobile, 2×2 otherwise ── */
