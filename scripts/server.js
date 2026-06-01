@@ -102,7 +102,7 @@ async function fetchUsOhlcv(symbol, interval, limit) {
   const cacheKey = `${symbol}:${interval}:${limit}`;
   const now = Date.now();
   const cached = ohlcvCache.get(cacheKey);
-  const ttl = ['day', 'week', 'month'].includes(interval) ? 3600000 : 300000;
+  const ttl = interval === 'day' ? 3000 : ['week', 'month'].includes(interval) ? 3600000 : 300000;
   if (cached && now - cached.ts < ttl) return cached.data;
 
   const intervalMap = {

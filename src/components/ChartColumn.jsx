@@ -74,8 +74,39 @@ function symbolTimeZone(symbol) {
   return isKoreanMarketSymbol(symbol) ? 'Asia/Seoul' : 'America/New_York';
 }
 
+function marketClock(timeZone) {
+  const parts = new Intl.DateTimeFormat('en-US', {
+    timeZone,
+    weekday: 'short',
+    hour: '2-digit',
+    minute: '2-digit',
+    hour12: false,
+  }).formatToParts(new Date());
+  const weekday = parts.find(part => part.type === 'weekday')?.value;
+  const hour = Number(parts.find(part => part.type === 'hour')?.value);
+  const minute = Number(parts.find(part => part.type === 'minute')?.value);
+  return { weekday, minutes: hour * 60 + minute };
+}
+
+function isRegularMarketOpen(symbol) {
+  const korean = isKoreanMarketSymbol(symbol);
+  const { weekday, minutes } = marketClock(symbolTimeZone(symbol));
+  if (weekday === 'Sat' || weekday === 'Sun') return false;
+  if (korean) return minutes >= 9 * 60 && minutes <= 15 * 60 + 30;
+  return minutes >= 9 * 60 + 30 && minutes <= 16 * 60;
+}
+
 function formatNumberNoDecimals(value) {
   return Math.round(Number(value) || 0).toLocaleString('ko-KR');
+}
+
+function formatNumber(value, digits = 0) {
+  const n = Number(value);
+  if (!Number.isFinite(n)) return '';
+  return n.toLocaleString('ko-KR', {
+    minimumFractionDigits: digits,
+    maximumFractionDigits: digits,
+  });
 }
 
 function formatPriceLabel(value, symbol) {
@@ -91,6 +122,24 @@ function formatVolumeLabel(value) {
   if (!Number.isFinite(n)) return '';
   if (Math.abs(n) >= 1000) return `${formatNumberNoDecimals(n / 1000)}k`;
   return formatNumberNoDecimals(n);
+}
+
+function formatHeaderPrice(value, symbol) {
+  return formatNumber(value, isIndexSymbol(symbol) ? 2 : 0);
+}
+
+function formatSignedValue(value, suffix = '', digits = 0) {
+  const n = Number(value);
+  if (!Number.isFinite(n)) return '';
+  const sign = n > 0 ? '+' : '';
+  return `${sign}${formatNumber(n, digits)}${suffix}`;
+}
+
+function formatSignedPercent(value) {
+  const n = Number(value);
+  if (!Number.isFinite(n)) return '';
+  const sign = n > 0 ? '+' : '';
+  return `${sign}${n.toFixed(2)}%`;
 }
 
 function volumeColorByChange(currentVolume, previousVolume) {
@@ -511,6 +560,18 @@ function buildValueMap(arr) {
     .map(d => [timeKey(d.time), d.value]));
 }
 
+function buildQuoteFromCandles(candles) {
+  const valid = (candles || []).filter(candle => Number.isFinite(candle?.close));
+  if (!valid.length) return null;
+  const latest = valid[valid.length - 1];
+  const previous = valid.slice(0, -1).reverse().find(candle => Number.isFinite(candle.close));
+  const price = Number(latest.close);
+  const previousClose = previous ? Number(previous.close) : null;
+  const change = Number.isFinite(previousClose) ? price - previousClose : null;
+  const changePct = Number.isFinite(previousClose) && previousClose !== 0 ? (change / previousClose) * 100 : null;
+  return { price, change, changePct };
+}
+
 function renderInlineMarkdown(text, keyPrefix) {
   const parts = String(text || '').split(/(\*\*[^*]+?\*\*|\*[^*\n]+?\*)/g);
   return parts.map((part, index) => {
@@ -699,6 +760,7 @@ export default function ChartColumn({ id, defaultSymbol, defaultName }) {
   const [analysisError, setAnalysisError] = useState('');
   const [analysisResult, setAnalysisResult] = useState('');
   const [analysisFontSize, setAnalysisFontSize] = useState(15);
+  const [quote, setQuote] = useState(null);
   const [copyStatus, setCopyStatus] = useState('');
   const [chartsReady, setChartsReady] = useState(false);
   const [loadVersion, setLoadVersion] = useState(0);
@@ -1216,6 +1278,17 @@ export default function ChartColumn({ id, defaultSymbol, defaultName }) {
     chart.timeScale().subscribeVisibleTimeRangeChange(paint);
   }, []);
 
+  const fetchQuote = useCallback(async (sym, signal) => {
+    if (!sym) return;
+    const response = await fetch(`/api/ohlcv?symbol=${encodeURIComponent(sym)}&interval=day&limit=6`, { signal });
+    const contentType = response.headers.get('content-type') || '';
+    if (!response.ok || !contentType.includes('application/json')) return;
+    const data = await response.json();
+    const candles = filterDailyTradingCandles(normalizeCandleData(data), sym, { interval: 'day' });
+    const nextQuote = buildQuoteFromCandles(candles);
+    if (nextQuote) setQuote({ ...nextQuote, symbol: sym });
+  }, []);
+
   // ─── 메인 3개 차트 데이터 로드 ───────────────────────
   const fetchMain = useCallback(async (sym, tf, lim) => {
     if (!sym || !ser.current.candle) return;
@@ -1431,6 +1504,30 @@ export default function ChartColumn({ id, defaultSymbol, defaultName }) {
     charts.current.ichi.applyOptions({ timeScale: { timeVisible: intraIchi } });
   }, [mainTf, ichiTf]);
 
+  useEffect(() => {
+    if (!symbol || !chartsReady) return;
+    const controller = new AbortController();
+    const updateQuote = () => fetchQuote(symbol, controller.signal).catch(() => {});
+    updateQuote();
+    let timer = null;
+
+    if (isRegularMarketOpen(symbol)) {
+      timer = setInterval(() => {
+        if (!isRegularMarketOpen(symbol)) {
+          clearInterval(timer);
+          timer = null;
+          return;
+        }
+        updateQuote();
+      }, 3000);
+    }
+
+    return () => {
+      controller.abort();
+      if (timer) clearInterval(timer);
+    };
+  }, [symbol, chartsReady, fetchQuote]);
+
   // ⑧ 실시간 업데이트: 분봉 1초, 일봉 5초
   useEffect(() => {
     if (!symbol || !chartsReady) return;
@@ -1540,6 +1637,16 @@ export default function ChartColumn({ id, defaultSymbol, defaultName }) {
           <div className="symbol-row">
             <span className="symbol-name">{symbolName}</span>
             <span className="symbol-code">{symbol}</span>
+            {quote?.symbol === symbol && (
+              <span className={`quote-chip ${quote.change >= 0 ? 'up' : 'down'}`}>
+                <span className="quote-price">{formatHeaderPrice(quote.price, symbol)}</span>
+                {Number.isFinite(quote.changePct) && Number.isFinite(quote.change) && (
+                  <span className="quote-change">
+                    ({formatSignedPercent(quote.changePct)}, {formatSignedValue(quote.change, '', isIndexSymbol(symbol) ? 2 : 0)})
+                  </span>
+                )}
+              </span>
+            )}
             {loading && <span className="loading-dot">●</span>}
           </div>
         )}
