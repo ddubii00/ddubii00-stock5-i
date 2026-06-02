@@ -34,20 +34,6 @@ function formatSignedPercent(value) {
   return `${sign}${n.toFixed(2)}%`;
 }
 
-function buildQuote(candles) {
-  const valid = (candles || []).filter(candle => Number.isFinite(Number(candle?.close)));
-  if (!valid.length) return null;
-
-  const latest = valid[valid.length - 1];
-  const previous = valid.slice(0, -1).reverse().find(candle => Number.isFinite(Number(candle.close)));
-  const price = Number(latest.close);
-  const previousClose = previous ? Number(previous.close) : null;
-  const change = Number.isFinite(previousClose) ? price - previousClose : null;
-  const changePct = Number.isFinite(previousClose) && previousClose !== 0 ? (change / previousClose) * 100 : null;
-
-  return { price, change, changePct };
-}
-
 function timeParts(timeZone) {
   const parts = new Intl.DateTimeFormat('en-US', {
     timeZone,
@@ -78,30 +64,32 @@ function isUsOpen() {
 }
 
 function App() {
-  const [marketSummary, setMarketSummary] = useState({ kospi: null, nasdaq: null, usdKrw: null });
+  const [marketSummary, setMarketSummary] = useState({ kospi: null, kosdaq: null, nasdaq: null, usdKrw: null });
 
-  const fetchDailyQuote = useCallback(async (symbol, signal) => {
-    const response = await fetch(`/api/ohlcv?symbol=${encodeURIComponent(symbol)}&interval=day&limit=6`, { signal });
+  const fetchQuote = useCallback(async (symbol, signal) => {
+    const response = await fetch(`/api/quote?symbol=${encodeURIComponent(symbol)}`, { signal });
     const contentType = response.headers.get('content-type') || '';
     if (!response.ok || !contentType.includes('application/json')) return null;
 
     const data = await response.json();
-    return buildQuote(Array.isArray(data) ? data : []);
+    return data && Number.isFinite(Number(data.price)) ? data : null;
   }, []);
 
   const refreshMarketSummary = useCallback(async (signal) => {
-    const [kospi, nasdaq, usdKrw] = await Promise.all([
-      fetchDailyQuote('^KS11', signal).catch(() => null),
-      fetchDailyQuote('^IXIC', signal).catch(() => null),
-      fetchDailyQuote('KRW=X', signal).catch(() => null),
+    const [kospi, kosdaq, nasdaq, usdKrw] = await Promise.all([
+      fetchQuote('^KS11', signal).catch(() => null),
+      fetchQuote('^KQ11', signal).catch(() => null),
+      fetchQuote('^IXIC', signal).catch(() => null),
+      fetchQuote('KRW=X', signal).catch(() => null),
     ]);
 
     setMarketSummary((current) => ({
       kospi: kospi || current.kospi,
+      kosdaq: kosdaq || current.kosdaq,
       nasdaq: nasdaq || current.nasdaq,
       usdKrw: usdKrw || current.usdKrw,
     }));
-  }, [fetchDailyQuote]);
+  }, [fetchQuote]);
 
   useEffect(() => {
     const controller = new AbortController();
@@ -118,7 +106,7 @@ function App() {
           return;
         }
         update();
-      }, 3000);
+      }, isKrxUpdateWindow() ? 1000 : 3000);
     }
 
     return () => {
@@ -150,6 +138,16 @@ function App() {
               {Number.isFinite(marketSummary.kospi.changePct) && Number.isFinite(marketSummary.kospi.change) && (
                 <span className="market-change market-change-fixed">
                   ({formatSignedPercent(marketSummary.kospi.changePct)}, {formatSignedFixed(marketSummary.kospi.change, 2)})
+                </span>
+              )}
+            </span>
+          )}
+          {marketSummary.kosdaq && (
+            <span className={`market-item ${marketSummary.kosdaq.change >= 0 ? 'up' : 'down'}`}>
+              KOSDAQ<strong className="market-price">{formatFixed(marketSummary.kosdaq.price, 2)}</strong>
+              {Number.isFinite(marketSummary.kosdaq.changePct) && Number.isFinite(marketSummary.kosdaq.change) && (
+                <span className="market-change market-change-fixed">
+                  ({formatSignedPercent(marketSummary.kosdaq.changePct)}, {formatSignedFixed(marketSummary.kosdaq.change, 2)})
                 </span>
               )}
             </span>

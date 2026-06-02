@@ -4,6 +4,7 @@ export const yahooFinance = new YahooFinance();
 
 let krxCache = { loadedAt: 0, items: [] };
 const ohlcvCache = new Map();
+const quoteCache = new Map();
 
 function decodeEucKr(buffer) {
   try {
@@ -67,6 +68,65 @@ export function parseNumeric(text) {
   if (!s || /^N\/?[AD]$/i.test(s) || /^null$/i.test(s)) return null;
   const v = Number(s.replace(/[^\d.+-]/g, ''));
   return Number.isFinite(v) ? v : null;
+}
+
+function quoteFromValues(price, change, changePct) {
+  const p = Number(price);
+  const c = Number(change);
+  const pct = Number(changePct);
+  if (!Number.isFinite(p)) return null;
+  return {
+    price: p,
+    change: Number.isFinite(c) ? c : null,
+    changePct: Number.isFinite(pct) ? pct : null,
+  };
+}
+
+async function fetchNaverIndexQuotes() {
+  const cacheKey = 'naver-index-quotes';
+  const now = Date.now();
+  const cached = quoteCache.get(cacheKey);
+  if (cached && now - cached.ts < 800) return cached.data;
+
+  const res = await fetch('https://polling.finance.naver.com/api/realtime/domestic/index/KOSPI,KOSDAQ', {
+    headers: { 'User-Agent': 'Mozilla/5.0', 'Accept-Language': 'ko-KR,ko;q=0.9', Referer: 'https://finance.naver.com/' },
+  });
+  if (!res.ok) throw new Error(`Naver index quote responded ${res.status}`);
+  const json = await res.json();
+  const data = new Map((json.datas || []).map(item => [
+    item.itemCode,
+    quoteFromValues(
+      parseNumeric(item.closePrice),
+      parseNumeric(item.compareToPreviousClosePrice),
+      parseNumeric(item.fluctuationsRatio)
+    ),
+  ]));
+  quoteCache.set(cacheKey, { ts: now, data });
+  return data;
+}
+
+export async function fetchRealtimeQuote(symbol) {
+  const key = String(symbol || '').toUpperCase();
+  if (key === '^KS11' || key === 'KOSPI') {
+    return (await fetchNaverIndexQuotes()).get('KOSPI') || null;
+  }
+  if (key === '^KQ11' || key === 'KOSDAQ') {
+    return (await fetchNaverIndexQuotes()).get('KOSDAQ') || null;
+  }
+
+  const cacheKey = `quote:${symbol}`;
+  const now = Date.now();
+  const cached = quoteCache.get(cacheKey);
+  if (cached && now - cached.ts < 3000) return cached.data;
+
+  const q = await yahooFinance.quote(symbol);
+  const price = q.regularMarketPrice ?? q.postMarketPrice ?? q.preMarketPrice;
+  const previousClose = q.regularMarketPreviousClose;
+  const change = q.regularMarketChange ?? (Number.isFinite(price) && Number.isFinite(previousClose) ? price - previousClose : null);
+  const changePct = q.regularMarketChangePercent ?? (Number.isFinite(change) && Number.isFinite(previousClose) && previousClose !== 0 ? (change / previousClose) * 100 : null);
+  const data = quoteFromValues(price, change, changePct);
+  quoteCache.set(cacheKey, { ts: now, data });
+  return data;
 }
 
 function krxMinuteOfDay(time) {
