@@ -575,6 +575,17 @@ function buildQuoteFromCandles(candles) {
   return { price, change, changePct };
 }
 
+function buildQuoteFromIntradayPrice(price, dailyCandles) {
+  const latestPrice = Number(price);
+  if (!Number.isFinite(latestPrice)) return null;
+  const valid = (dailyCandles || []).filter(candle => Number.isFinite(candle?.close));
+  const previous = valid.length >= 2 ? valid[valid.length - 2] : valid[0];
+  const previousClose = previous ? Number(previous.close) : null;
+  const change = Number.isFinite(previousClose) ? latestPrice - previousClose : null;
+  const changePct = Number.isFinite(previousClose) && previousClose !== 0 ? (change / previousClose) * 100 : null;
+  return { price: latestPrice, change, changePct };
+}
+
 function renderInlineMarkdown(text, keyPrefix) {
   const parts = String(text || '').split(/(\*\*[^*]+?\*\*|\*[^*\n]+?\*)/g);
   return parts.map((part, index) => {
@@ -1283,12 +1294,26 @@ export default function ChartColumn({ id, defaultSymbol, defaultName }) {
 
   const fetchQuote = useCallback(async (sym, signal) => {
     if (!sym) return;
-    const response = await fetch(`/api/ohlcv?symbol=${encodeURIComponent(sym)}&interval=day&limit=6`, { signal });
+    const realtimeKorean = isKoreanSymbol(sym) && isMarketUpdateWindow(sym);
+    const dailyUrl = `/api/ohlcv?symbol=${encodeURIComponent(sym)}&interval=day&limit=6`;
+    const response = await fetch(dailyUrl, { signal });
     const contentType = response.headers.get('content-type') || '';
     if (!response.ok || !contentType.includes('application/json')) return;
     const data = await response.json();
     const candles = filterDailyTradingCandles(normalizeCandleData(data), sym, { interval: 'day' });
-    const nextQuote = buildQuoteFromCandles(candles);
+
+    let nextQuote = buildQuoteFromCandles(candles);
+    if (realtimeKorean) {
+      const minuteResponse = await fetch(`/api/ohlcv?symbol=${encodeURIComponent(sym)}&interval=1m&limit=5`, { signal });
+      const minuteContentType = minuteResponse.headers.get('content-type') || '';
+      if (minuteResponse.ok && minuteContentType.includes('application/json')) {
+        const minuteData = await minuteResponse.json();
+        const minuteCandles = normalizeCandleData(minuteData);
+        const latestMinute = minuteCandles[minuteCandles.length - 1];
+        nextQuote = buildQuoteFromIntradayPrice(latestMinute?.close, candles) || nextQuote;
+      }
+    }
+
     if (nextQuote) setQuote({ ...nextQuote, symbol: sym });
   }, []);
 
@@ -1522,7 +1547,7 @@ export default function ChartColumn({ id, defaultSymbol, defaultName }) {
           return;
         }
         updateQuote();
-      }, 3000);
+      }, isKoreanSymbol(symbol) ? 1000 : 3000);
     }
 
     return () => {
@@ -1535,7 +1560,7 @@ export default function ChartColumn({ id, defaultSymbol, defaultName }) {
   useEffect(() => {
     if (!symbol || !chartsReady) return;
     const isIntra = INTRA_INTERVALS.includes(mainTf.interval);
-    const ms = isIntra ? 3000 : 5000;
+    const ms = isIntra ? (isKoreanSymbol(symbol) ? 1000 : 3000) : 5000;
     const t = setInterval(() => {
       if (isMarketUpdateWindow(symbol)) fetchMain(symbol, mainTf, limit, { followLatest: isIntra }).catch(() => {});
     }, ms);
@@ -1545,7 +1570,7 @@ export default function ChartColumn({ id, defaultSymbol, defaultName }) {
   useEffect(() => {
     if (!symbol || !chartsReady) return;
     const isIntra = INTRA_INTERVALS.includes(ichiTf.interval);
-    const ms = isIntra ? 3000 : 5000;
+    const ms = isIntra ? (isKoreanSymbol(symbol) ? 1000 : 3000) : 5000;
     const t = setInterval(() => {
       if (isMarketUpdateWindow(symbol)) fetchIchi(symbol, ichiTf, ichiLimit).catch(() => {});
     }, ms);

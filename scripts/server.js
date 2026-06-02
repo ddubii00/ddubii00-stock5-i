@@ -131,7 +131,7 @@ async function fetchKoreanMinuteOhlcv(code, interval, limit) {
   const cacheKey = `krx-minute:${code}:${interval}:${limit}`;
   const now = Date.now();
   const cached = ohlcvCache.get(cacheKey);
-  if (cached && now - cached.ts < 3000) return cached.data;
+  if (cached && now - cached.ts < 800) return cached.data;
 
   const fetchCount = Math.min(Math.max(limit * intervalMinutes + 300, 600), 3000);
   const url = `https://fchart.stock.naver.com/sise.nhn?symbol=${encodeURIComponent(code)}&timeframe=minute&count=${fetchCount}&requestType=0`;
@@ -199,7 +199,7 @@ async function fetchUsOhlcv(symbol, interval, limit) {
   const cacheKey = `${symbol}:${interval}:${limit}`;
   const now = Date.now();
   const cached = ohlcvCache.get(cacheKey);
-  const ttl = interval === 'day' || KRX_INTRADAY_MINUTES[interval] ? 3000 : ['week', 'month'].includes(interval) ? 3600000 : 300000;
+  const ttl = interval === 'day' ? 3000 : KRX_INTRADAY_MINUTES[interval] ? 800 : ['week', 'month'].includes(interval) ? 3600000 : 300000;
   if (cached && now - cached.ts < ttl) return cached.data;
 
   const intervalMap = {
