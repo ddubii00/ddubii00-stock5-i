@@ -1294,6 +1294,16 @@ export default function ChartColumn({ id, defaultSymbol, defaultName }) {
 
   const fetchQuote = useCallback(async (sym, signal) => {
     if (!sym) return;
+    const quoteResponse = await fetch(`/api/quote?symbol=${encodeURIComponent(sym)}`, { signal });
+    const quoteContentType = quoteResponse.headers.get('content-type') || '';
+    if (quoteResponse.ok && quoteContentType.includes('application/json')) {
+      const quoteData = await quoteResponse.json();
+      if (Number.isFinite(Number(quoteData?.price))) {
+        setQuote({ ...quoteData, symbol: sym });
+        return;
+      }
+    }
+
     const realtimeKorean = isKoreanSymbol(sym) && isMarketUpdateWindow(sym);
     const dailyUrl = `/api/ohlcv?symbol=${encodeURIComponent(sym)}&interval=day&limit=6`;
     const response = await fetch(dailyUrl, { signal });

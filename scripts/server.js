@@ -15,6 +15,7 @@ app.use(express.json({ limit: '25mb' }));
 let krxCache = { loadedAt: 0, items: [] };
 const ohlcvCache = new Map();
 const quoteCache = new Map();
+let kisTokenCache = { token: '', expiresAt: 0 };
 
 function decodeEucKr(buffer) {
   try { return new TextDecoder('euc-kr').decode(buffer); }
@@ -84,6 +85,104 @@ function quoteFromValues(price, change, changePct) {
   };
 }
 
+function isKoreanStockSymbol(symbol) {
+  return /^\d{6}(\.(KS|KQ))?$/.test(symbol || '') || /\.(KS|KQ)$/.test(symbol || '');
+}
+
+function cleanKoreanCode(symbol) {
+  return String(symbol || '').replace(/\.(KS|KQ)$/, '');
+}
+
+function kisBaseUrl() {
+  return process.env.KIS_BASE_URL || 'https://openapi.koreainvestment.com:9443';
+}
+
+function hasKisConfig() {
+  return Boolean(process.env.KIS_APP_KEY && process.env.KIS_APP_SECRET);
+}
+
+async function fetchKisAccessToken() {
+  if (!hasKisConfig()) return '';
+  const now = Date.now();
+  if (kisTokenCache.token && kisTokenCache.expiresAt - now > 60_000) return kisTokenCache.token;
+
+  const res = await fetch(`${kisBaseUrl()}/oauth2/tokenP`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({
+      grant_type: 'client_credentials',
+      appkey: process.env.KIS_APP_KEY,
+      appsecret: process.env.KIS_APP_SECRET,
+    }),
+  });
+  if (!res.ok) throw new Error(`KIS token responded ${res.status}`);
+  const json = await res.json();
+  const token = json.access_token || '';
+  const expiresIn = Number(json.expires_in) || 3600;
+  kisTokenCache = { token, expiresAt: now + expiresIn * 1000 };
+  return token;
+}
+
+function kisHeaders(token, trId) {
+  return {
+    Authorization: `Bearer ${token}`,
+    appkey: process.env.KIS_APP_KEY,
+    appsecret: process.env.KIS_APP_SECRET,
+    tr_id: trId,
+    custtype: 'P',
+  };
+}
+
+async function fetchKisDomesticStockQuote(symbol) {
+  const token = await fetchKisAccessToken();
+  if (!token) return null;
+  const params = new URLSearchParams({
+    FID_COND_MRKT_DIV_CODE: 'J',
+    FID_INPUT_ISCD: cleanKoreanCode(symbol),
+  });
+  const res = await fetch(`${kisBaseUrl()}/uapi/domestic-stock/v1/quotations/inquire-price?${params}`, {
+    headers: kisHeaders(token, 'FHKST01010100'),
+  });
+  if (!res.ok) throw new Error(`KIS domestic quote responded ${res.status}`);
+  const json = await res.json();
+  const out = json.output || {};
+  return quoteFromValues(
+    parseNumeric(out.stck_prpr),
+    parseNumeric(out.prdy_vrss),
+    parseNumeric(out.prdy_ctrt)
+  );
+}
+
+function kisExchangeForUsSymbol(symbol) {
+  const overrides = (() => {
+    try { return JSON.parse(process.env.KIS_US_EXCHANGE_OVERRIDES || '{}'); }
+    catch { return {}; }
+  })();
+  const upper = String(symbol || '').toUpperCase();
+  return overrides[upper] || process.env.KIS_DEFAULT_US_EXCHANGE || 'NAS';
+}
+
+async function fetchKisOverseasStockQuote(symbol) {
+  if (String(symbol || '').startsWith('^') || String(symbol || '').includes('=')) return null;
+  const token = await fetchKisAccessToken();
+  if (!token) return null;
+  const params = new URLSearchParams({
+    AUTH: '',
+    EXCD: kisExchangeForUsSymbol(symbol),
+    SYMB: String(symbol || '').toUpperCase(),
+  });
+  const res = await fetch(`${kisBaseUrl()}/uapi/overseas-price/v1/quotations/price?${params}`, {
+    headers: kisHeaders(token, 'HHDFS00000300'),
+  });
+  if (!res.ok) throw new Error(`KIS overseas quote responded ${res.status}`);
+  const json = await res.json();
+  const out = json.output || {};
+  const price = parseNumeric(out.last);
+  const change = parseNumeric(out.diff);
+  const changePct = parseNumeric(out.rate);
+  return quoteFromValues(price, change, changePct);
+}
+
 async function fetchNaverIndexQuotes() {
   const cacheKey = 'naver-index-quotes';
   const now = Date.now();
@@ -109,6 +208,25 @@ async function fetchNaverIndexQuotes() {
 
 async function fetchRealtimeQuote(symbol) {
   const key = String(symbol || '').toUpperCase();
+  const kisQuoteKey = `kis-quote:${symbol}`;
+  const now = Date.now();
+  const kisCached = quoteCache.get(kisQuoteKey);
+  if (kisCached && now - kisCached.ts < 800) return kisCached.data;
+
+  if (hasKisConfig()) {
+    try {
+      const kisQuote = isKoreanStockSymbol(symbol)
+        ? await fetchKisDomesticStockQuote(symbol)
+        : await fetchKisOverseasStockQuote(symbol);
+      if (kisQuote) {
+        quoteCache.set(kisQuoteKey, { ts: now, data: kisQuote });
+        return kisQuote;
+      }
+    } catch (e) {
+      console.warn(`KIS quote fallback [${symbol}]:`, e.message);
+    }
+  }
+
   if (key === '^KS11' || key === 'KOSPI') {
     return (await fetchNaverIndexQuotes()).get('KOSPI') || null;
   }
@@ -117,7 +235,6 @@ async function fetchRealtimeQuote(symbol) {
   }
 
   const cacheKey = `quote:${symbol}`;
-  const now = Date.now();
   const cached = quoteCache.get(cacheKey);
   if (cached && now - cached.ts < 3000) return cached.data;
 
