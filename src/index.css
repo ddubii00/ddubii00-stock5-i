@@ -34,7 +34,7 @@ html, body {
   z-index: 3000;
   display: flex;
   align-items: center;
-  justify-content: space-between;
+  justify-content: flex-start;
   gap: 8px;
   padding: 10px 20px;
   background: #fff;
@@ -44,30 +44,13 @@ html, body {
   flex-wrap: nowrap;
 }
 
-.app-heading {
-  display: flex;
-  align-items: center;
-  gap: 10px;
-  min-width: 0;
-  flex: 0 0 auto;
-}
-
-.app-title {
-  font-size: 17px;
-  font-weight: 700;
-  background: linear-gradient(135deg, #1a73e8, #7c3aed);
-  -webkit-background-clip: text;
-  -webkit-text-fill-color: transparent;
-  background-clip: text;
-}
-
 .market-summary {
   display: flex;
   align-items: baseline;
-  justify-content: flex-end;
+  justify-content: flex-start;
   gap: 6px;
-  margin-left: auto;
-  text-align: right;
+  margin-left: 0;
+  text-align: left;
   white-space: nowrap;
   min-width: 0;
   flex: 1 1 auto;

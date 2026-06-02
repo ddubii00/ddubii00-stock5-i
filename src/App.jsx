@@ -118,9 +118,6 @@ function App() {
   return (
     <div className="app">
       <header className="app-header">
-        <div className="app-heading">
-          <h1 className="app-title">📈 Stock Dashboard</h1>
-        </div>
         <div className="market-summary" aria-label="시장 요약">
           {marketSummary.usdKrw && (
             <span className={`market-item ${marketSummary.usdKrw.change >= 0 ? 'up' : 'down'}`}>
