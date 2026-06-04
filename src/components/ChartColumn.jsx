@@ -880,7 +880,7 @@ export default function ChartColumn({ id, defaultSymbol, defaultName }) {
 
     if (!bgCanvasRef.current) {
       const canvas = document.createElement('canvas');
-      canvas.style.cssText = 'position:absolute;inset:0;pointer-events:none;z-index:1;';
+      canvas.style.cssText = 'position:absolute;inset:0;pointer-events:none;z-index:3;';
       container.style.position = 'relative';
       container.appendChild(canvas);
       bgCanvasRef.current = canvas;
@@ -901,41 +901,33 @@ export default function ChartColumn({ id, defaultSymbol, defaultName }) {
 
     // MACD 0선 기준으로 배경 칠하기
     const ts = macdChart.timeScale();
-    let prevX = null, prevFill = null;
-    let firstX = null, firstFill = null;
-    const plotRight = rect.width;
+    const plotRight = typeof ts.width === 'function' ? ts.width() : rect.width;
+    const points = macdData
+      .map((d) => {
+        if (!Number.isFinite(d.macd)) return null;
+        const x = ts.timeToCoordinate(d.time);
+        if (x == null) return null;
+        return {
+          x,
+          fill: d.macd >= 0 ? 'rgba(239,83,80,0.14)' : 'rgba(21,101,192,0.14)',
+        };
+      })
+      .filter(Boolean)
+      .sort((a, b) => a.x - b.x);
 
-    for (let i = 0; i < macdData.length; i++) {
-      const d = macdData[i];
-      if (!Number.isFinite(d.macd)) continue;
-      const sign = d.macd >= 0 ? 1 : -1;
-      const x = ts.timeToCoordinate(d.time);
-      if (x == null) { prevX = null; continue; }
+    if (!points.length || plotRight <= 0) return;
 
-      const fill = sign > 0
-        ? 'rgba(239,83,80,0.12)'
-        : 'rgba(21,101,192,0.12)';
-
-      if (firstX === null) {
-        firstX = x;
-        firstFill = fill;
-      }
-      if (prevX !== null) {
-        ctx.fillStyle = prevFill || fill;
-        ctx.fillRect(prevX, 0, x - prevX, rect.height);
-      }
-      prevX = x;
-      prevFill = fill;
-    }
-
-    if (firstX !== null && firstFill && firstX > 0) {
-      ctx.fillStyle = firstFill;
-      ctx.fillRect(0, 0, firstX, rect.height);
-    }
-    if (prevX !== null && prevFill && plotRight > prevX) {
-      ctx.fillStyle = prevFill;
-      ctx.fillRect(prevX, 0, plotRight - prevX, rect.height);
-    }
+    points.forEach((point, idx) => {
+      const prev = points[idx - 1];
+      const next = points[idx + 1];
+      const from = idx === 0 ? 0 : (prev.x + point.x) / 2;
+      const to = idx === points.length - 1 ? plotRight : (point.x + next.x) / 2;
+      const x = Math.max(0, Math.floor(from) - 1);
+      const width = Math.max(0, Math.ceil(to) - x + 1);
+      if (!width) return;
+      ctx.fillStyle = point.fill;
+      ctx.fillRect(x, 0, width, rect.height);
+    });
   }, []);
 
   // ─── 차트 초기화 (once) ──────────────────────────────
