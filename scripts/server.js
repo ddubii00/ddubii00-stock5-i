@@ -16,6 +16,8 @@ let krxCache = { loadedAt: 0, items: [] };
 const ohlcvCache = new Map();
 const quoteCache = new Map();
 let kisTokenCache = { token: '', expiresAt: 0 };
+const REALTIME_QUOTE_TTL_MS = 250;
+const KRX_MINUTE_TTL_MS = 300;
 
 function decodeEucKr(buffer) {
   try { return new TextDecoder('euc-kr').decode(buffer); }
@@ -93,6 +95,37 @@ function cleanKoreanCode(symbol) {
   return String(symbol || '').replace(/\.(KS|KQ)$/, '');
 }
 
+function quoteFromCandles(candles) {
+  const valid = (candles || []).filter(candle => Number.isFinite(candle?.close));
+  if (!valid.length) return null;
+  const latest = valid[valid.length - 1];
+  const previous = valid.slice(0, -1).reverse().find(candle => Number.isFinite(candle.close));
+  const price = Number(latest.close);
+  const previousClose = previous ? Number(previous.close) : null;
+  const change = Number.isFinite(previousClose) ? price - previousClose : null;
+  const changePct = Number.isFinite(previousClose) && previousClose !== 0 ? (change / previousClose) * 100 : null;
+  return quoteFromValues(price, change, changePct);
+}
+
+function kstDateKeyFromSeconds(time) {
+  if (typeof time !== 'number') return '';
+  return new Intl.DateTimeFormat('en-CA', {
+    timeZone: 'Asia/Seoul',
+    year: 'numeric',
+    month: '2-digit',
+    day: '2-digit',
+  }).format(new Date(time * 1000)).replaceAll('-', '');
+}
+
+function quoteFromPriceAndPreviousClose(price, previousClose) {
+  const p = Number(price);
+  const prev = Number(previousClose);
+  if (!Number.isFinite(p)) return null;
+  const change = Number.isFinite(prev) ? p - prev : null;
+  const changePct = Number.isFinite(prev) && prev !== 0 ? (change / prev) * 100 : null;
+  return quoteFromValues(p, change, changePct);
+}
+
 function kisBaseUrl() {
   return process.env.KIS_BASE_URL || 'https://openapi.koreainvestment.com:9443';
 }
@@ -153,6 +186,22 @@ async function fetchKisDomesticStockQuote(symbol) {
   );
 }
 
+async function fetchKoreanStockQuote(symbol) {
+  const code = cleanKoreanCode(symbol);
+  const [intraday, daily] = await Promise.all([
+    fetchKoreanOhlcv(code, '1m', 10).catch(() => []),
+    fetchKoreanOhlcv(code, 'day', 3).catch(() => []),
+  ]);
+  const minuteCandles = filterKrxRegularMinutes(intraday || []);
+  const latestSource = minuteCandles.length ? minuteCandles : (intraday || []);
+  const latest = latestSource[latestSource.length - 1] || daily[daily.length - 1];
+  const latestDate = latest?.date || kstDateKeyFromSeconds(latest?.time);
+  const dailyRows = (daily || []).filter(row => Number.isFinite(row?.close));
+  const previousDaily = [...dailyRows].reverse().find(row => row.date !== latestDate);
+  const previousClose = previousDaily?.close ?? dailyRows[dailyRows.length - 2]?.close;
+  return quoteFromPriceAndPreviousClose(latest?.close, previousClose) || quoteFromCandles(dailyRows);
+}
+
 function kisExchangeForUsSymbol(symbol) {
   const overrides = (() => {
     try { return JSON.parse(process.env.KIS_US_EXCHANGE_OVERRIDES || '{}'); }
@@ -211,7 +260,7 @@ async function fetchRealtimeQuote(symbol) {
   const kisQuoteKey = `kis-quote:${symbol}`;
   const now = Date.now();
   const kisCached = quoteCache.get(kisQuoteKey);
-  if (kisCached && now - kisCached.ts < 800) return kisCached.data;
+  if (kisCached && now - kisCached.ts < REALTIME_QUOTE_TTL_MS) return kisCached.data;
 
   if (hasKisConfig()) {
     try {
@@ -224,6 +273,17 @@ async function fetchRealtimeQuote(symbol) {
       }
     } catch (e) {
       console.warn(`KIS quote fallback [${symbol}]:`, e.message);
+    }
+  }
+
+  if (isKoreanStockSymbol(symbol)) {
+    const cacheKey = `krx-quote:${symbol}`;
+    const cached = quoteCache.get(cacheKey);
+    if (cached && now - cached.ts < REALTIME_QUOTE_TTL_MS) return cached.data;
+    const krxQuote = await fetchKoreanStockQuote(symbol);
+    if (krxQuote) {
+      quoteCache.set(cacheKey, { ts: now, data: krxQuote });
+      return krxQuote;
     }
   }
 
@@ -308,7 +368,7 @@ async function fetchKoreanMinuteOhlcv(code, interval, limit) {
   const cacheKey = `krx-minute:${code}:${interval}:${limit}`;
   const now = Date.now();
   const cached = ohlcvCache.get(cacheKey);
-  if (cached && now - cached.ts < 800) return cached.data;
+  if (cached && now - cached.ts < KRX_MINUTE_TTL_MS) return cached.data;
 
   const fetchCount = Math.min(Math.max(limit * intervalMinutes + 300, 600), 3000);
   const url = `https://fchart.stock.naver.com/sise.nhn?symbol=${encodeURIComponent(code)}&timeframe=minute&count=${fetchCount}&requestType=0`;
@@ -376,7 +436,7 @@ async function fetchUsOhlcv(symbol, interval, limit) {
   const cacheKey = `${symbol}:${interval}:${limit}`;
   const now = Date.now();
   const cached = ohlcvCache.get(cacheKey);
-  const ttl = interval === 'day' ? 3000 : KRX_INTRADAY_MINUTES[interval] ? 800 : ['week', 'month'].includes(interval) ? 3600000 : 300000;
+  const ttl = interval === 'day' ? 3000 : KRX_INTRADAY_MINUTES[interval] ? KRX_MINUTE_TTL_MS : ['week', 'month'].includes(interval) ? 3600000 : 300000;
   if (cached && now - cached.ts < ttl) return cached.data;
 
   const intervalMap = {

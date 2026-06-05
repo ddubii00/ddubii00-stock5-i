@@ -1557,7 +1557,7 @@ export default function ChartColumn({ id, defaultSymbol, defaultName }) {
           return;
         }
         updateQuote();
-      }, isKoreanSymbol(symbol) ? 1000 : 3000);
+      }, isKoreanSymbol(symbol) ? 700 : 3000);
     }
 
     return () => {
