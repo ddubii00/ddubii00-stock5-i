@@ -1,0 +1,59 @@
+iPad iSH에서 stock5 실행하기
+
+전제
+- iSH의 Node.js가 16.11.1 이상이면 실행 가능하도록 맞춰둔 버전입니다.
+- iSH에서는 Vite 개발 서버보다 미리 빌드된 dist를 Node 서버로 여는 npm start 방식을 권장합니다.
+- KIS/Gemini API를 쓰려면 프로젝트 폴더 안에 .env.local 파일이 있어야 합니다.
+
+1. iSH에서 필요한 패키지 설치
+
+apk update
+apk add nodejs npm unzip
+
+2. zip 파일을 iSH 안으로 가져오기
+
+iPad Files 앱에 둔 zip을 iSH에서 직접 보기 어려울 수 있습니다.
+가장 쉬운 방법은 iSH 앱의 Files 공유 폴더로 zip을 옮긴 뒤 iSH에서 확인하는 것입니다.
+
+ls
+
+zip 파일이 보이면 압축을 풉니다.
+
+unzip ddubii00-stock5-ish-ready.zip
+cd ddubii00-stock5-i
+
+3. 의존성 설치
+
+npm install --omit=dev
+
+4. API 키 설정
+
+.env.example을 참고해 .env.local을 만듭니다.
+이미 .env.local을 함께 옮겼다면 이 단계는 건너뜁니다.
+
+cp .env.example .env.local
+vi .env.local
+
+필수 값
+- KIS_APP_KEY
+- KIS_APP_SECRET
+- KIS_BASE_URL
+- KIS_WS_URL
+- GEMINI_API_KEY
+
+5. 웹서버 실행
+
+npm start
+
+정상 실행되면 다음 주소로 접속합니다.
+
+http://localhost:3001/
+
+6. 멈추는 방법
+
+iSH 터미널에서 Ctrl+C를 누릅니다.
+
+주의
+- iSH에서는 npm run dev 대신 npm start를 쓰세요.
+- npm run dev는 Vite 개발 서버를 같이 띄우는 방식이라 iSH에서 느리거나 실패할 수 있습니다.
+- node_modules는 Mac에서 복사하지 말고 iSH 안에서 npm install --omit=dev로 새로 설치하는 것이 안전합니다.

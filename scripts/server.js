@@ -4,13 +4,17 @@ import dotenv from 'dotenv';
 import express from 'express';
 import cors from 'cors';
 import WebSocket from 'ws';
-import YahooFinance from 'yahoo-finance2';
+import nodeFetch, { Headers, Request, Response } from 'node-fetch';
 import { analyzeCharts } from '../api/_analyze.js';
 
 dotenv.config({ path: '.env.local', quiet: true });
 dotenv.config({ quiet: true });
 
-const yahooFinance = new YahooFinance();
+if (!globalThis.fetch) globalThis.fetch = nodeFetch;
+if (!globalThis.Headers) globalThis.Headers = Headers;
+if (!globalThis.Request) globalThis.Request = Request;
+if (!globalThis.Response) globalThis.Response = Response;
+
 const app = express();
 const PORT = process.env.PORT || 3001;
 
@@ -166,6 +170,61 @@ function parseNumeric(text) {
   if (!s || /^N\/?[AD]$/i.test(s) || /^null$/i.test(s)) return null;
   const v = Number(s.replace(/[^\d.+-]/g, ''));
   return Number.isFinite(v) ? v : null;
+}
+
+function unixTimeFromDateInput(value) {
+  if (value instanceof Date) return Math.floor(value.getTime() / 1000);
+  if (typeof value === 'number' && Number.isFinite(value)) return Math.floor(value);
+  const parsed = Date.parse(String(value || ''));
+  if (Number.isFinite(parsed)) return Math.floor(parsed / 1000);
+  return Math.floor((Date.now() - 365 * 24 * 3600000) / 1000);
+}
+
+async function yahooFetchJson(url) {
+  const res = await fetch(url, {
+    headers: {
+      'User-Agent': 'Mozilla/5.0',
+      'Accept-Language': 'en-US,en;q=0.9,ko;q=0.8',
+    },
+  });
+  if (!res.ok) throw new Error(`Yahoo responded ${res.status}`);
+  return res.json();
+}
+
+async function yahooSearch(query, quotesCount = 10) {
+  const url = `https://query1.finance.yahoo.com/v1/finance/search?q=${encodeURIComponent(query)}&quotesCount=${quotesCount}&newsCount=0`;
+  return yahooFetchJson(url);
+}
+
+async function yahooChart(symbol, { period1, interval }) {
+  const params = new URLSearchParams({
+    period1: String(unixTimeFromDateInput(period1)),
+    period2: String(Math.floor(Date.now() / 1000)),
+    interval,
+    events: 'history',
+    includePrePost: 'false',
+  });
+  const url = `https://query1.finance.yahoo.com/v8/finance/chart/${encodeURIComponent(symbol)}?${params}`;
+  const payload = await yahooFetchJson(url);
+  const result = payload?.chart?.result?.[0];
+  const timestamps = result?.timestamp || [];
+  const quote = result?.indicators?.quote?.[0] || {};
+  return {
+    quotes: timestamps.map((ts, index) => ({
+      date: new Date(ts * 1000),
+      open: quote.open?.[index] ?? null,
+      high: quote.high?.[index] ?? null,
+      low: quote.low?.[index] ?? null,
+      close: quote.close?.[index] ?? null,
+      volume: quote.volume?.[index] ?? null,
+    })),
+  };
+}
+
+async function yahooQuote(symbol) {
+  const url = `https://query1.finance.yahoo.com/v7/finance/quote?symbols=${encodeURIComponent(symbol)}`;
+  const payload = await yahooFetchJson(url);
+  return payload?.quoteResponse?.result?.[0] || null;
 }
 
 function quoteFromValues(price, change, changePct) {
@@ -476,7 +535,8 @@ async function fetchRealtimeQuote(symbol) {
   const cached = quoteCache.get(cacheKey);
   if (cached && now - cached.ts < 3000) return cached.data;
 
-  const q = await yahooFinance.quote(symbol);
+  const q = await yahooQuote(symbol);
+  if (!q) return null;
   const price = q.regularMarketPrice ?? q.postMarketPrice ?? q.preMarketPrice;
   const previousClose = q.regularMarketPreviousClose;
   const change = q.regularMarketChange ?? (Number.isFinite(price) && Number.isFinite(previousClose) ? price - previousClose : null);
@@ -891,7 +951,7 @@ async function fetchUsOhlcv(symbol, interval, limit) {
 
   let result;
   try {
-    result = await yahooFinance.chart(symbol, { period1, interval: yInterval });
+    result = await yahooChart(symbol, { period1, interval: yInterval });
   } catch (e) {
     if (['1m', '3m', '5m', '15m', '30m', '60m', '1h'].includes(interval)) {
       const fallbackInterval = fallbackIntervalFor(interval);
@@ -978,7 +1038,7 @@ app.get('/api/search', async (req, res) => {
     let usMatches = [];
     if (!isKoreanQuery) {
       try {
-        const result = await yahooFinance.search(q, { quotesCount: 10 });
+        const result = await yahooSearch(q, 10);
         usMatches = (result.quotes || [])
           .filter(x => ['EQUITY', 'ETF', 'INDEX', 'FUTURE'].includes(x.quoteType) && !x.symbol.match(/\.(KS|KQ|T|HK|AX)$/))
           .slice(0, 10)
