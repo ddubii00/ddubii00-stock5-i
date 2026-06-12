@@ -48,7 +48,11 @@ function isIntradayTf(tf) {
 }
 
 function requestLimit(tf, baseLimit) {
-  const buffer = isIntradayTf(tf) ? 1200 : 720;
+  if (isIntradayTf(tf)) {
+    const buffer = 1200;
+    return Math.min(Math.max(baseLimit + buffer, baseLimit * 4, 240), 2000);
+  }
+  const buffer = 720;
   return Math.min(Math.max(baseLimit + buffer, baseLimit * 4), 2000);
 }
 
@@ -68,6 +72,13 @@ function isKoreanMarketSymbol(symbol) {
 
 function isIndexSymbol(symbol) {
   return String(symbol || '').startsWith('^');
+}
+
+function supportsKisRealtimeStream(symbol) {
+  const value = String(symbol || '').toUpperCase();
+  if (isKoreanSymbol(value)) return true;
+  if (value === '^KS11' || value === '^KQ11') return true;
+  return Boolean(value) && !value.startsWith('^') && !value.includes('=');
 }
 
 function symbolTimeZone(symbol) {
@@ -137,7 +148,19 @@ function formatVolumeLabel(value) {
 }
 
 function formatHeaderPrice(value, symbol) {
-  return formatNumber(value, isIndexSymbol(symbol) ? 2 : 0);
+  return formatNumber(value, isKoreanSymbol(symbol) ? 0 : 2);
+}
+
+function quoteValueDigits(symbol) {
+  return isKoreanSymbol(symbol) ? 0 : 2;
+}
+
+function quoteTone(quote) {
+  const change = Number(quote?.change);
+  if (Number.isFinite(change) && change !== 0) return change > 0 ? 'up' : 'down';
+  const pct = Number(quote?.changePct);
+  if (Number.isFinite(pct) && pct !== 0) return pct > 0 ? 'up' : 'down';
+  return 'flat';
 }
 
 function formatSignedValue(value, suffix = '', digits = 0) {
@@ -586,6 +609,38 @@ function buildQuoteFromIntradayPrice(price, dailyCandles) {
   return { price: latestPrice, change, changePct };
 }
 
+function kstDatePartsFromNow() {
+  const parts = new Intl.DateTimeFormat('en-US', {
+    timeZone: 'Asia/Seoul',
+    year: 'numeric',
+    month: '2-digit',
+    day: '2-digit',
+  }).formatToParts(new Date());
+  return {
+    year: Number(parts.find(p => p.type === 'year')?.value),
+    month: Number(parts.find(p => p.type === 'month')?.value),
+    day: Number(parts.find(p => p.type === 'day')?.value),
+  };
+}
+
+function realtimeBarTime(quote, tf) {
+  const tradeTime = String(quote?.tradeTime || '').padStart(6, '0');
+  if (!/^\d{6}$/.test(tradeTime) || !isIntradayTf(tf)) return null;
+  const tradeDate = String(quote?.tradeDate || '');
+  const fallback = kstDatePartsFromNow();
+  const year = /^\d{8}$/.test(tradeDate) ? Number(tradeDate.slice(0, 4)) : fallback.year;
+  const month = /^\d{8}$/.test(tradeDate) ? Number(tradeDate.slice(4, 6)) : fallback.month;
+  const day = /^\d{8}$/.test(tradeDate) ? Number(tradeDate.slice(6, 8)) : fallback.day;
+  const hour = Number(tradeTime.slice(0, 2));
+  const minute = Number(tradeTime.slice(2, 4));
+  const second = Number(tradeTime.slice(4, 6));
+  if (![year, month, day, hour, minute, second].every(Number.isFinite)) return null;
+
+  const utcSeconds = Math.floor(Date.UTC(year, month - 1, day, hour - 9, minute, second) / 1000);
+  const step = barSeconds(tf.interval);
+  return Math.floor(utcSeconds / step) * step;
+}
+
 function renderInlineMarkdown(text, keyPrefix) {
   const parts = String(text || '').split(/(\*\*[^*]+?\*\*|\*[^*\n]+?\*)/g);
   return parts.map((part, index) => {
@@ -813,6 +868,8 @@ export default function ChartColumn({ id, defaultSymbol, defaultName }) {
   const ser         = useRef({});
   const maMaps      = useRef([]);
   const macdDataRef = useRef([]);   // ③ MACD 데이터 저장
+  const mainCandlesRef = useRef([]);
+  const mainVolumeRef = useRef([]);
   const crosshairValueMapsRef = useRef({ candle: new Map(), volume: new Map(), macd: new Map() });
   const ichiValueMapsRef = useRef({
     candle: new Map(),
@@ -943,6 +1000,11 @@ export default function ChartColumn({ id, defaultSymbol, defaultName }) {
     if (inited.current) return;
     if (!priceRef.current || !volumeRef.current || !macdRef.current || !ichiRef.current) return;
     inited.current = true;
+    [priceRef, volumeRef, macdRef, ichiRef].forEach((ref) => {
+      ref.current?.replaceChildren();
+    });
+    bgCanvasRef.current = null;
+    cloudCanvas.current = null;
 
     const w = (ref) => ref.current?.clientWidth || 400;
     const chartOptions = {
@@ -991,7 +1053,10 @@ export default function ChartColumn({ id, defaultSymbol, defaultName }) {
     // ② 음봉=파란색, ④ 마지막 종가 점선 제거
     ser.current.candle = pc.addSeries(CandlestickSeries, {
       upColor: '#ef5350', downColor: '#1565c0',
-      borderVisible: false,
+      borderVisible: true,
+      wickVisible: true,
+      borderUpColor: '#dc2626',
+      borderDownColor: '#0f5fb8',
       wickUpColor: '#ef5350', wickDownColor: '#1565c0',
       priceFormat: { type: 'custom', formatter: (price) => formatPriceLabel(price, symbolRef.current) },
       ...NO_PRICE_LINE,
@@ -1024,7 +1089,10 @@ export default function ChartColumn({ id, defaultSymbol, defaultName }) {
 
     ser.current.ichiCandle = ic.addSeries(CandlestickSeries, {
       upColor: '#ef5350', downColor: '#1565c0',
-      borderVisible: false,
+      borderVisible: true,
+      wickVisible: true,
+      borderUpColor: '#dc2626',
+      borderDownColor: '#0f5fb8',
       wickUpColor: '#ef5350', wickDownColor: '#1565c0',
       priceFormat: { type: 'custom', formatter: (price) => formatPriceLabel(price, symbolRef.current) },
       ...NO_PRICE_LINE,
@@ -1083,6 +1151,15 @@ export default function ChartColumn({ id, defaultSymbol, defaultName }) {
                 const isUp  = data.close >= data.open;
                 const color = isUp ? '#dc2626' : '#1565c0';
                 const tk    = timeKey(param.time);
+                const candles = mainCandlesRef.current;
+                const candleIndex = candles.findIndex(candle => timeKey(candle.time) === tk);
+                const previousClose = candleIndex > 0 ? Number(candles[candleIndex - 1]?.close) : null;
+                const changePct = Number.isFinite(previousClose) && previousClose !== 0
+                  ? ((Number(data.close) - previousClose) / previousClose) * 100
+                  : null;
+                const changePctColor = Number.isFinite(changePct)
+                  ? (changePct >= 0 ? '#dc2626' : '#1565c0')
+                  : color;
                 const maRows = MA_PERIODS.slice(0, 4).map((p, idx) => {
                   const val = maMaps.current[idx]?.get(tk);
                   return val != null
@@ -1095,14 +1172,18 @@ export default function ChartColumn({ id, defaultSymbol, defaultName }) {
                   `<span>시가 <b>${formatPriceLabel(data.open, symbolRef.current)}</b></span>` +
                   `<span>종가 <b>${formatPriceLabel(data.close, symbolRef.current)}</b></span>` +
                   `</div>` +
+                  (Number.isFinite(changePct)
+                    ? `<div class="tt-row" style="color:${changePctColor}"><span>등락률</span><b>${formatSignedPercent(changePct)}</b></div>`
+                    : '') +
                   (maRows ? `<div class="tt-ma-row">${maRows}</div>` : '');
 
                 const cw = priceRef.current?.clientWidth || 400;
-                let lx = param.point.x - 146;
+                const tooltipWidth = 168;
+                let lx = param.point.x - tooltipWidth - 14;
                 if (lx < 4) lx = param.point.x + 12;
-                if (lx + 136 > cw) lx = Math.max(4, cw - 136);
+                if (lx + tooltipWidth > cw) lx = Math.max(4, cw - tooltipWidth);
                 tip.style.left = lx + 'px';
-                tip.style.top  = Math.max(4, param.point.y - 42) + 'px';
+                tip.style.top  = Math.max(4, param.point.y - 58) + 'px';
                 tip.style.display = 'block';
               }
             }
@@ -1187,7 +1268,14 @@ export default function ChartColumn({ id, defaultSymbol, defaultName }) {
     return () => {
       window.removeEventListener('resize', onResize);
       inited.current = false;
+      bgCanvasRef.current?.remove();
+      cloudCanvas.current?.remove();
+      bgCanvasRef.current = null;
+      cloudCanvas.current = null;
       Object.values(charts.current).forEach(c => { try { c.remove(); } catch (e) { console.warn('Chart remove skipped:', e); } });
+      [priceRef, volumeRef, macdRef, ichiRef].forEach((ref) => {
+        ref.current?.replaceChildren();
+      });
       charts.current = {};
       ser.current = {};
       maMaps.current = [];
@@ -1292,6 +1380,85 @@ export default function ChartColumn({ id, defaultSymbol, defaultName }) {
     chart.timeScale().subscribeVisibleTimeRangeChange(paint);
   }, []);
 
+  const applyRealtimeQuote = useCallback((quoteData) => {
+    const activeSymbol = symbolRef.current;
+    if (!activeSymbol || !quoteData || !Number.isFinite(Number(quoteData.price))) return;
+    setQuote({ ...quoteData, symbol: activeSymbol });
+
+    if (!isIntradayTf(mainTf) || !ser.current.candle) return;
+    const barTime = realtimeBarTime(quoteData, mainTf);
+    if (!barTime) return;
+
+    const candles = [...mainCandlesRef.current];
+    const price = Number(quoteData.price);
+    const tradeVolume = Number(quoteData.tradeVolume);
+    const last = candles[candles.length - 1];
+    if (!last || barTime < Number(last.time)) return;
+
+    if (barTime === Number(last.time)) {
+      const nextVolume = Number.isFinite(tradeVolume)
+        ? (Number(last.volume) || 0) + tradeVolume
+        : last.volume;
+      candles[candles.length - 1] = {
+        ...last,
+        high: Math.max(last.high, price),
+        low: Math.min(last.low, price),
+        close: price,
+        volume: nextVolume,
+      };
+    } else {
+      candles.push({
+        time: barTime,
+        open: price,
+        high: price,
+        low: price,
+        close: price,
+        volume: Number.isFinite(tradeVolume) ? tradeVolume : 0,
+      });
+    }
+
+    mainCandlesRef.current = candles;
+    ser.current.candle.setData(candles);
+    crosshairValueMapsRef.current.candle = new Map(candles.map(d => [timeKey(d.time), d.close]));
+
+    const volData = candles.map((d, i) => {
+      const currentVolume = +d.volume;
+      const previousVolume = candles[i - 1]?.volume;
+      if (!Number.isFinite(currentVolume)) return { time: d.time };
+      return {
+        time: d.time,
+        value: currentVolume,
+        color: volumeColorByChange(currentVolume, previousVolume),
+      };
+    });
+    mainVolumeRef.current = volData;
+    ser.current.vol?.setData(volData);
+    crosshairValueMapsRef.current.volume = new Map(volData.filter(d => Number.isFinite(d.value)).map(d => [timeKey(d.time), d.value]));
+
+    const macd = calculateMACD(candles);
+    macdDataRef.current = macd;
+    const macdHistData = macd.map(d => (
+      Number.isFinite(d.histogram)
+        ? { time: d.time, value: d.histogram, color: d.histogram >= 0 ? '#ef5350' : '#1565c0' }
+        : { time: d.time }
+    ));
+    ser.current.macdHist?.setData(macdHistData);
+    ser.current.macdLine?.setData(macd.map(d => (
+      Number.isFinite(d.macd) ? { time: d.time, value: d.macd } : { time: d.time }
+    )));
+    ser.current.signal?.setData(macd.map(d => (
+      Number.isFinite(d.signal) ? { time: d.time, value: d.signal } : { time: d.time }
+    )));
+    crosshairValueMapsRef.current.macd = new Map(macdHistData.filter(d => Number.isFinite(d.value)).map(d => [timeKey(d.time), d.value]));
+
+    maMaps.current = MA_PERIODS.map((period, idx) => {
+      const maData = calculateMA(candles, period);
+      ser.current.maLines[idx]?.setData(safeLineData(maData));
+      return buildTimeMap(maData);
+    });
+    drawMacdBackground();
+  }, [drawMacdBackground, mainTf]);
+
   const fetchQuote = useCallback(async (sym, signal) => {
     if (!sym) return;
     const quoteResponse = await fetch(`/api/quote?symbol=${encodeURIComponent(sym)}`, { signal });
@@ -1342,18 +1509,14 @@ export default function ChartColumn({ id, defaultSymbol, defaultName }) {
     }
     const data = await r.json();
     if (!Array.isArray(data) || !data.length) {
-      ser.current.candle.setData([]);
-      ser.current.vol.setData([]);
-      ser.current.macdHist.setData([]);
-      ser.current.macdLine.setData([]);
-      ser.current.signal.setData([]);
-      crosshairValueMapsRef.current = { candle: new Map(), volume: new Map(), macd: new Map() };
-      return;
+      throw new Error(`${tf.label} 데이터가 비어 있습니다.`);
     }
 
     // ② null 값 필터링
     const candles = normalizeCandleData(data);
     if (!candles.length) throw new Error('시세 데이터가 비어 있습니다.');
+    crosshairValueMapsRef.current = { candle: new Map(), volume: new Map(), macd: new Map() };
+    mainCandlesRef.current = candles;
     ser.current.candle.setData(candles);
     crosshairValueMapsRef.current.candle = new Map(candles.map(d => [timeKey(d.time), d.close]));
 
@@ -1376,6 +1539,7 @@ export default function ChartColumn({ id, defaultSymbol, defaultName }) {
           color: volumeColorByChange(currentVolume, previousVolume),
         };
       });
+    mainVolumeRef.current = volData;
     ser.current.vol.setData(volData);
     crosshairValueMapsRef.current.volume = new Map(volData.filter(d => Number.isFinite(d.value)).map(d => [timeKey(d.time), d.value]));
 
@@ -1405,8 +1569,9 @@ export default function ChartColumn({ id, defaultSymbol, defaultName }) {
     // ③ MACD 배경 그리기 (약간 지연 → 차트 렌더 후)
     requestAnimationFrame(() => {
       if (mainViewKeyRef.current !== viewKey || followLatest) {
+        const visibleBars = Math.min(lim, candles.length);
         const range = {
-          from: Math.max(0, candles.length - lim),
+          from: Math.max(0, candles.length - visibleBars),
           to: Math.max(0, candles.length - 1),
         };
         [charts.current.price, charts.current.volume, charts.current.macd].forEach(chart => {
@@ -1513,24 +1678,29 @@ export default function ChartColumn({ id, defaultSymbol, defaultName }) {
     });
   }, [drawCloud, ichiLimit]);
 
-  // symbol/tf/limit 변경 시 로드
+  // 메인 캔들/거래량/MACD는 위쪽 봉 버튼과 기간만 바뀔 때 다시 로드
   useEffect(() => {
     if (!symbol) return;
     const timer = setTimeout(() => {
       setError('');
       setLoading(true);
     }, 0);
-    Promise.all([
-      fetchMain(symbol, mainTf, limit).catch(e => {
+    fetchMain(symbol, mainTf, limit)
+      .catch(e => {
         if (!String(e.message || '').includes('Value is null')) setError(e.message);
-      }),
-      fetchIchi(symbol, ichiTf, ichiLimit).catch(() => {}),
-    ]).finally(() => {
-      clearTimeout(timer);
-      setLoading(false);
-    });
+      })
+      .finally(() => {
+        clearTimeout(timer);
+        setLoading(false);
+      });
     return () => clearTimeout(timer);
-  }, [symbol, mainTf, ichiTf, limit, ichiLimit, loadVersion, fetchMain, fetchIchi]);
+  }, [symbol, mainTf, limit, loadVersion, fetchMain]);
+
+  // 일목균형표는 아래쪽 일목 봉 버튼과 기간이 바뀔 때만 다시 로드
+  useEffect(() => {
+    if (!symbol) return;
+    fetchIchi(symbol, ichiTf, ichiLimit).catch(() => {});
+  }, [symbol, ichiTf, ichiLimit, loadVersion, fetchIchi]);
 
   useEffect(() => {
     if (!charts.current.price) return;
@@ -1566,6 +1736,30 @@ export default function ChartColumn({ id, defaultSymbol, defaultName }) {
     };
   }, [symbol, chartsReady, fetchQuote]);
 
+  useEffect(() => {
+    if (!symbol || !chartsReady || !supportsKisRealtimeStream(symbol)) return undefined;
+    const stream = new EventSource(`/api/stream/quote?symbol=${encodeURIComponent(symbol)}`);
+
+    const handleQuote = (event) => {
+      try {
+        const payload = JSON.parse(event.data);
+        if (payload?.quote) applyRealtimeQuote(payload.quote);
+      } catch (e) {
+        console.warn('Realtime quote parse failed:', e);
+      }
+    };
+
+    stream.addEventListener('quote', handleQuote);
+    stream.onerror = () => {
+      // EventSource reconnects automatically; REST polling remains as fallback.
+    };
+
+    return () => {
+      stream.removeEventListener('quote', handleQuote);
+      stream.close();
+    };
+  }, [symbol, chartsReady, applyRealtimeQuote]);
+
   // ⑧ 실시간 업데이트: 최신 캔들을 3초마다 따라가게 갱신
   useEffect(() => {
     if (!symbol || !chartsReady) return;
@@ -1593,6 +1787,13 @@ export default function ChartColumn({ id, defaultSymbol, defaultName }) {
       setLimit(n);
       setLimitInput(String(n));
     }
+  };
+
+  const changeMainTf = (tf) => {
+    mainViewKeyRef.current = '';
+    setError('');
+    setLoading(true);
+    setMainTf(tf);
   };
 
   const applyIchiLimit = () => {
@@ -1676,11 +1877,11 @@ export default function ChartColumn({ id, defaultSymbol, defaultName }) {
             <span className="symbol-name">{symbolName}</span>
             <span className="symbol-code">{symbol}</span>
             {quote?.symbol === symbol && (
-              <span className={`quote-chip ${quote.change >= 0 ? 'up' : 'down'}`}>
+              <span className={`quote-chip ${quoteTone(quote)}`}>
                 <span className="quote-price">{formatHeaderPrice(quote.price, symbol)}</span>
                 {Number.isFinite(quote.changePct) && Number.isFinite(quote.change) && (
                   <span className="quote-change">
-                    ({formatSignedPercent(quote.changePct)}, {formatSignedValue(quote.change, '', isIndexSymbol(symbol) ? 2 : 0)})
+                    ({formatSignedPercent(quote.changePct)}, {formatSignedValue(quote.change, '', quoteValueDigits(symbol))})
                   </span>
                 )}
                 <span className="quote-state">{marketStateLabel(symbol)}</span>
@@ -1698,7 +1899,7 @@ export default function ChartColumn({ id, defaultSymbol, defaultName }) {
               {MAIN_TFS.map(tf => (
                 <button key={tf.label}
                   className={`tf-btn${mainTf.label === tf.label ? ' active' : ''}`}
-                  onClick={() => setMainTf(tf)}>
+                  onClick={() => changeMainTf(tf)}>
                   {tf.label}
                 </button>
               ))}

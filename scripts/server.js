@@ -1,9 +1,14 @@
 import process from 'node:process';
 import { existsSync } from 'node:fs';
+import dotenv from 'dotenv';
 import express from 'express';
 import cors from 'cors';
+import WebSocket from 'ws';
 import YahooFinance from 'yahoo-finance2';
 import { analyzeCharts } from '../api/_analyze.js';
+
+dotenv.config({ path: '.env.local', quiet: true });
+dotenv.config({ quiet: true });
 
 const yahooFinance = new YahooFinance();
 const app = express();
@@ -16,8 +21,66 @@ let krxCache = { loadedAt: 0, items: [] };
 const ohlcvCache = new Map();
 const quoteCache = new Map();
 let kisTokenCache = { token: '', expiresAt: 0 };
+let kisApprovalCache = { key: '', expiresAt: 0 };
 const REALTIME_QUOTE_TTL_MS = 250;
 const KRX_MINUTE_TTL_MS = 300;
+const KIS_TR = {
+  DOMESTIC_STOCK: 'H0STCNT0',
+  DOMESTIC_INDEX: 'H0UPCNT0',
+  OVERSEAS_STOCK: 'HDFSCNT0',
+};
+const KIS_REALTIME_COLUMNS = {
+  [KIS_TR.DOMESTIC_STOCK]: 46,
+  [KIS_TR.DOMESTIC_INDEX]: 30,
+  [KIS_TR.OVERSEAS_STOCK]: 26,
+};
+const KIS_INDEX_SYMBOLS = {
+  '0001': { key: '0001', symbol: '^KS11' },
+  '^KS11': { key: '0001', symbol: '^KS11' },
+  KOSPI: { key: '0001', symbol: '^KS11' },
+  '1001': { key: '1001', symbol: '^KQ11' },
+  '^KQ11': { key: '1001', symbol: '^KQ11' },
+  KOSDAQ: { key: '1001', symbol: '^KQ11' },
+  '2001': { key: '2001', symbol: '^KS200' },
+  '^KS200': { key: '2001', symbol: '^KS200' },
+  KOSPI200: { key: '2001', symbol: '^KS200' },
+};
+const KIS_US_WS_EXCHANGE = {
+  NAS: 'DNAS',
+  NASD: 'DNAS',
+  NASDAQ: 'DNAS',
+  NYS: 'DNYS',
+  NYSE: 'DNYS',
+  AMS: 'DAMS',
+  AMEX: 'DAMS',
+  ASE: 'DAMS',
+  BAQ: 'RBAQ',
+  BAY: 'RBAY',
+  BAA: 'RBAA',
+};
+const realtimeClients = new Map();
+const realtimeSymbols = new Map();
+const realtimeQuotes = new Map();
+let kisRealtimeSocket = null;
+let kisRealtimeConnecting = null;
+let kisReconnectTimer = null;
+
+const KRX_FALLBACK_ITEMS = [
+  { name: 'SK하이닉스', code: '000660', marketType: '유가증권' },
+  { name: '삼성전자', code: '005930', marketType: '유가증권' },
+  { name: '한미반도체', code: '042700', marketType: '유가증권' },
+  { name: '현대차', code: '005380', marketType: '유가증권' },
+  { name: '기아', code: '000270', marketType: '유가증권' },
+  { name: 'NAVER', code: '035420', marketType: '유가증권' },
+  { name: '카카오', code: '035720', marketType: '유가증권' },
+  { name: '셀트리온', code: '068270', marketType: '유가증권' },
+  { name: '삼성바이오로직스', code: '207940', marketType: '유가증권' },
+  { name: 'LG에너지솔루션', code: '373220', marketType: '유가증권' },
+];
+const KRX_SEARCH_ALIASES = {
+  '000660': ['하이', '하이닉스', 'sk하이', 'sk하이닉스', '에스케이하이닉스', 'hynix'],
+  '005930': ['삼전', '삼성', '삼성전자', 'samsung'],
+};
 
 function decodeEucKr(buffer) {
   try { return new TextDecoder('euc-kr').decode(buffer); }
@@ -47,12 +110,42 @@ async function loadKrxList() {
       if (!name || digits.length !== 6) continue;
       items.push({ name, code: digits, marketType });
     }
-    krxCache = { loadedAt: now, items };
-    return items;
+    const merged = mergeKrxItems(items);
+    krxCache = { loadedAt: now, items: merged };
+    return merged;
   } catch (e) {
     console.error('KRX load failed:', e.message);
-    return krxCache.items;
+    return krxCache.items.length ? krxCache.items : KRX_FALLBACK_ITEMS;
   }
+}
+
+function mergeKrxItems(items) {
+  const byCode = new Map();
+  [...KRX_FALLBACK_ITEMS, ...(items || [])].forEach((item) => {
+    if (item?.code) byCode.set(item.code, item);
+  });
+  return [...byCode.values()];
+}
+
+function normalizeSearchText(value) {
+  return String(value || '').toLowerCase().replace(/\s+/g, '');
+}
+
+function krxSearchScore(item, query) {
+  const q = normalizeSearchText(query);
+  const name = normalizeSearchText(item.name);
+  const code = String(item.code || '');
+  const aliases = (KRX_SEARCH_ALIASES[code] || []).map(normalizeSearchText);
+  if (!q) return 0;
+  if (code === q) return 100;
+  if (name === q) return 95;
+  if (aliases.includes(q)) return 90;
+  if (name.startsWith(q)) return 80;
+  if (aliases.some(alias => alias.startsWith(q))) return 75;
+  if (name.includes(q)) return 60;
+  if (aliases.some(alias => alias.includes(q) || q.includes(alias))) return 55;
+  if (code.includes(q)) return 50;
+  return 0;
 }
 
 const INDEX_MAP = {
@@ -77,9 +170,20 @@ function parseNumeric(text) {
 
 function quoteFromValues(price, change, changePct) {
   const p = Number(price);
-  const c = Number(change);
-  const pct = Number(changePct);
+  let c = Number(change);
+  let pct = Number(changePct);
   if (!Number.isFinite(p)) return null;
+
+  if (
+    Number.isFinite(c) &&
+    Number.isFinite(pct) &&
+    c !== 0 &&
+    pct !== 0 &&
+    Math.sign(c) !== Math.sign(pct)
+  ) {
+    c = Math.sign(pct) * Math.abs(c);
+  }
+
   return {
     price: p,
     change: Number.isFinite(c) ? c : null,
@@ -130,6 +234,11 @@ function kisBaseUrl() {
   return process.env.KIS_BASE_URL || 'https://openapi.koreainvestment.com:9443';
 }
 
+function kisWsUrl() {
+  const base = process.env.KIS_WS_URL || 'ws://ops.koreainvestment.com:21000';
+  return base.endsWith('/tryitout') ? base : `${base.replace(/\/$/, '')}/tryitout`;
+}
+
 function hasKisConfig() {
   return Boolean(process.env.KIS_APP_KEY && process.env.KIS_APP_SECRET);
 }
@@ -154,6 +263,28 @@ async function fetchKisAccessToken() {
   const expiresIn = Number(json.expires_in) || 3600;
   kisTokenCache = { token, expiresAt: now + expiresIn * 1000 };
   return token;
+}
+
+async function fetchKisApprovalKey() {
+  if (!hasKisConfig()) return '';
+  const now = Date.now();
+  if (kisApprovalCache.key && kisApprovalCache.expiresAt - now > 60_000) return kisApprovalCache.key;
+
+  const res = await fetch(`${kisBaseUrl()}/oauth2/Approval`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({
+      grant_type: 'client_credentials',
+      appkey: process.env.KIS_APP_KEY,
+      secretkey: process.env.KIS_APP_SECRET,
+    }),
+  });
+  if (!res.ok) throw new Error(`KIS approval key responded ${res.status}`);
+  const json = await res.json();
+  const key = json.approval_key || '';
+  if (!key) throw new Error('KIS approval key missing');
+  kisApprovalCache = { key, expiresAt: now + 23 * 60 * 60 * 1000 };
+  return key;
 }
 
 function kisHeaders(token, trId) {
@@ -211,6 +342,50 @@ function kisExchangeForUsSymbol(symbol) {
   return overrides[upper] || process.env.KIS_DEFAULT_US_EXCHANGE || 'NAS';
 }
 
+function realtimeKeyForSymbol(symbol) {
+  return String(symbol || '').toUpperCase().replace(/\.(KS|KQ)$/, '');
+}
+
+function kisRealtimeTopic(symbol) {
+  const raw = String(symbol || '').trim();
+  const upper = raw.toUpperCase();
+  const index = KIS_INDEX_SYMBOLS[upper];
+  if (index) {
+    return {
+      kind: 'domestic-index',
+      trId: KIS_TR.DOMESTIC_INDEX,
+      trKey: index.key,
+      appSymbol: index.symbol,
+      cacheKey: realtimeKeyForSymbol(index.symbol),
+    };
+  }
+
+  if (isKoreanStockSymbol(raw)) {
+    const code = cleanKoreanCode(raw);
+    return {
+      kind: 'domestic-stock',
+      trId: KIS_TR.DOMESTIC_STOCK,
+      trKey: code,
+      appSymbol: code,
+      cacheKey: code,
+    };
+  }
+
+  if (!upper.startsWith('^') && !upper.includes('=')) {
+    const exchange = kisExchangeForUsSymbol(upper);
+    const prefix = KIS_US_WS_EXCHANGE[String(exchange || '').toUpperCase()] || 'DNAS';
+    return {
+      kind: 'overseas-stock',
+      trId: KIS_TR.OVERSEAS_STOCK,
+      trKey: `${prefix}${upper}`,
+      appSymbol: upper,
+      cacheKey: upper,
+    };
+  }
+
+  return null;
+}
+
 async function fetchKisOverseasStockQuote(symbol) {
   if (String(symbol || '').startsWith('^') || String(symbol || '').includes('=')) return null;
   const token = await fetchKisAccessToken();
@@ -257,6 +432,9 @@ async function fetchNaverIndexQuotes() {
 
 async function fetchRealtimeQuote(symbol) {
   const key = String(symbol || '').toUpperCase();
+  const realtime = realtimeQuotes.get(realtimeKeyForSymbol(key));
+  if (realtime && Date.now() - realtime.receivedAt < 10_000) return realtime.quote;
+
   const kisQuoteKey = `kis-quote:${symbol}`;
   const now = Date.now();
   const kisCached = quoteCache.get(kisQuoteKey);
@@ -306,6 +484,259 @@ async function fetchRealtimeQuote(symbol) {
   const data = quoteFromValues(price, change, changePct);
   quoteCache.set(cacheKey, { ts: now, data });
   return data;
+}
+
+function sendSse(res, event, data) {
+  res.write(`event: ${event}\n`);
+  res.write(`data: ${JSON.stringify(data)}\n\n`);
+}
+
+function broadcastRealtimeQuote(symbol, quote) {
+  const code = realtimeKeyForSymbol(symbol);
+  const payload = { symbol: code, quote, receivedAt: Date.now() };
+  realtimeQuotes.set(code, payload);
+
+  for (const [id, client] of realtimeClients) {
+    if (client.symbol !== code) continue;
+    try {
+      sendSse(client.res, 'quote', payload);
+    } catch {
+      realtimeClients.delete(id);
+    }
+  }
+}
+
+function signedKisValue(signCode, value) {
+  const n = parseNumeric(value);
+  if (!Number.isFinite(n)) return null;
+  const code = String(signCode || '').trim();
+  if (code === '4' || code === '5') return -Math.abs(n);
+  if (code === '1' || code === '2') return Math.abs(n);
+  return n;
+}
+
+function kisSubscribeMessage(approvalKey, topic, trType = '1') {
+  return JSON.stringify({
+    header: {
+      approval_key: approvalKey,
+      custtype: 'P',
+      tr_type: trType,
+      'content-type': 'utf-8',
+    },
+    body: {
+      input: {
+        tr_id: topic.trId,
+        tr_key: topic.trKey,
+      },
+    },
+  });
+}
+
+function subscribeKisSymbol(cacheKey) {
+  const topic = realtimeSymbols.get(cacheKey);
+  if (!topic || !kisRealtimeSocket || kisRealtimeSocket.readyState !== WebSocket.OPEN) return;
+  fetchKisApprovalKey()
+    .then(approvalKey => kisRealtimeSocket?.send(kisSubscribeMessage(approvalKey, topic, '1')))
+    .catch(e => console.warn(`KIS realtime subscribe skipped [${cacheKey}]:`, e.message));
+}
+
+function unsubscribeKisSymbol(cacheKey) {
+  const topic = realtimeSymbols.get(cacheKey);
+  if (!topic) return;
+  realtimeSymbols.delete(cacheKey);
+  if (!kisRealtimeSocket || kisRealtimeSocket.readyState !== WebSocket.OPEN) return;
+  fetchKisApprovalKey()
+    .then(approvalKey => kisRealtimeSocket?.send(kisSubscribeMessage(approvalKey, topic, '2')))
+    .catch(e => console.warn(`KIS realtime unsubscribe skipped [${cacheKey}]:`, e.message));
+}
+
+function hasRealtimeClientForSymbol(cacheKey) {
+  for (const client of realtimeClients.values()) {
+    if (client.symbol === cacheKey) return true;
+  }
+  return false;
+}
+
+function scheduleKisReconnect() {
+  if (kisReconnectTimer || !realtimeSymbols.size) return;
+  kisReconnectTimer = setTimeout(() => {
+    kisReconnectTimer = null;
+    connectKisRealtime().catch(e => console.warn('KIS realtime reconnect failed:', e.message));
+  }, 2000);
+}
+
+function parseKisDomesticStockRow(row) {
+  const price = parseNumeric(row[2]);
+  if (!Number.isFinite(price)) return null;
+  const sign = row[3];
+  return {
+    symbol: row[0],
+    quote: {
+      price,
+      change: signedKisValue(sign, row[4]),
+      changePct: signedKisValue(sign, row[5]),
+      open: parseNumeric(row[7]),
+      high: parseNumeric(row[8]),
+      low: parseNumeric(row[9]),
+      ask: parseNumeric(row[10]),
+      bid: parseNumeric(row[11]),
+      tradeVolume: parseNumeric(row[12]),
+      volume: parseNumeric(row[13]),
+      tradeTime: row[1],
+      tradeDate: row[33],
+      source: 'kis-ws',
+    },
+  };
+}
+
+function parseKisDomesticIndexRow(row) {
+  const index = KIS_INDEX_SYMBOLS[row[0]];
+  const price = parseNumeric(row[2]);
+  if (!index || !Number.isFinite(price)) return null;
+  const sign = row[3];
+  return {
+    symbol: index.symbol,
+    quote: {
+      price,
+      change: signedKisValue(sign, row[4]),
+      changePct: signedKisValue(sign, row[9]),
+      open: parseNumeric(row[10]),
+      high: parseNumeric(row[11]),
+      low: parseNumeric(row[12]),
+      tradeVolume: parseNumeric(row[7]),
+      volume: parseNumeric(row[5]),
+      tradeTime: row[1],
+      source: 'kis-ws-index',
+    },
+  };
+}
+
+function parseKisOverseasStockRow(row) {
+  const topic = [...realtimeSymbols.values()].find(item => item.trId === KIS_TR.OVERSEAS_STOCK && item.trKey === row[0]);
+  const price = parseNumeric(row[10]);
+  if (!topic || !Number.isFinite(price)) return null;
+  const sign = row[11];
+  return {
+    symbol: topic.appSymbol,
+    quote: {
+      price,
+      change: signedKisValue(sign, row[12]),
+      changePct: signedKisValue(sign, row[13]),
+      open: parseNumeric(row[7]),
+      high: parseNumeric(row[8]),
+      low: parseNumeric(row[9]),
+      bid: parseNumeric(row[14]),
+      ask: parseNumeric(row[15]),
+      tradeVolume: parseNumeric(row[18]),
+      volume: parseNumeric(row[19]),
+      tradeTime: row[6] || row[4],
+      tradeDate: row[5] || row[3],
+      source: 'kis-ws-overseas',
+    },
+  };
+}
+
+function parseKisRealtimePacket(message) {
+  const text = String(message || '');
+  if (!text || text[0] !== '0') return [];
+  const [encrypted, trId, countText, body] = text.split('|');
+  if (encrypted !== '0' || !body) return [];
+
+  const columnCount = KIS_REALTIME_COLUMNS[trId];
+  if (!columnCount) return [];
+
+  const count = Number(countText) || 1;
+  const values = body.split('^');
+  const rows = [];
+  for (let i = 0; i < count; i += 1) {
+    const offset = i * columnCount;
+    const row = values.slice(offset, offset + columnCount);
+    let parsed = null;
+    if (trId === KIS_TR.DOMESTIC_STOCK) parsed = parseKisDomesticStockRow(row);
+    if (trId === KIS_TR.DOMESTIC_INDEX) parsed = parseKisDomesticIndexRow(row);
+    if (trId === KIS_TR.OVERSEAS_STOCK) parsed = parseKisOverseasStockRow(row);
+    if (parsed) rows.push(parsed);
+  }
+  return rows;
+}
+
+async function connectKisRealtime() {
+  if (!hasKisConfig()) throw new Error('KIS_APP_KEY/KIS_APP_SECRET missing');
+  if (kisRealtimeSocket?.readyState === WebSocket.OPEN) return kisRealtimeSocket;
+  if (kisRealtimeConnecting) return kisRealtimeConnecting;
+
+  kisRealtimeConnecting = (async () => {
+    const approvalKey = await fetchKisApprovalKey();
+    const socket = new WebSocket(kisWsUrl());
+    kisRealtimeSocket = socket;
+
+    socket.on('open', () => {
+      console.log(`✅ KIS realtime WebSocket connected (${realtimeSymbols.size} symbols)`);
+      for (const topic of realtimeSymbols.values()) {
+        socket.send(kisSubscribeMessage(approvalKey, topic, '1'));
+      }
+    });
+
+    socket.on('message', (data) => {
+      const text = data.toString();
+      if (text[0] === '{') {
+        try {
+          const json = JSON.parse(text);
+          const msg = json?.body?.msg1;
+          if (msg && !/SUBSCRIBE SUCCESS/i.test(msg)) console.warn('KIS realtime:', msg);
+        } catch {
+          // ignore malformed control messages
+        }
+        return;
+      }
+
+      for (const row of parseKisRealtimePacket(text)) {
+        broadcastRealtimeQuote(row.symbol, row.quote);
+      }
+    });
+
+    socket.on('close', () => {
+      console.warn('KIS realtime WebSocket closed');
+      if (kisRealtimeSocket === socket) kisRealtimeSocket = null;
+      scheduleKisReconnect();
+    });
+
+    socket.on('error', (e) => {
+      console.warn('KIS realtime WebSocket error:', e.message);
+    });
+
+    await new Promise((resolve, reject) => {
+      socket.once('open', resolve);
+      socket.once('error', reject);
+      setTimeout(() => reject(new Error('KIS realtime WebSocket timeout')), 8000);
+    });
+    return socket;
+  })();
+
+  try {
+    return await kisRealtimeConnecting;
+  } finally {
+    kisRealtimeConnecting = null;
+  }
+}
+
+function registerRealtimeSymbol(symbol) {
+  const topic = kisRealtimeTopic(symbol);
+  if (!topic) return null;
+  const wasSubscribed = realtimeSymbols.has(topic.cacheKey);
+  realtimeSymbols.set(topic.cacheKey, topic);
+
+  if (wasSubscribed) return topic;
+
+  if (kisRealtimeSocket?.readyState === WebSocket.OPEN) {
+    subscribeKisSymbol(topic.cacheKey);
+    return topic;
+  }
+
+  connectKisRealtime()
+    .catch(e => console.warn(`KIS realtime unavailable [${topic.cacheKey}]:`, e.message));
+
+  return topic;
 }
 
 function krxMinuteOfDay(time) {
@@ -528,23 +959,33 @@ app.get('/api/search', async (req, res) => {
     if (!q || q.trim().length < 1) return res.json([]);
     const query = q.trim().toLowerCase();
     const upperQ = q.trim().toUpperCase().replace(/\s/g, '');
+    const isKoreanQuery = /[ㄱ-ㅎㅏ-ㅣ가-힣]/.test(query);
     const indexMatches = Object.entries(INDEX_MAP)
       .filter(([key]) => key.includes(upperQ) || upperQ.includes(key.slice(0, 3)))
       .map(([, v]) => ({ symbol: v.symbol, name: v.name, exchange: v.exchange, type: 'INDEX' }));
-    const krxList = await loadKrxList();
+    const krxList = isKoreanQuery && !krxCache.items.length
+      ? KRX_FALLBACK_ITEMS
+      : await loadKrxList();
+    if (isKoreanQuery && !krxCache.items.length) {
+      loadKrxList().catch(() => {});
+    }
     const krxMatches = krxList
-      .filter(x => x.name.toLowerCase().includes(query) || x.code.includes(query))
+      .map(x => ({ item: x, score: krxSearchScore(x, query) }))
+      .filter(x => x.score > 0)
+      .sort((a, b) => b.score - a.score || a.item.name.localeCompare(b.item.name, 'ko'))
       .slice(0, 15)
-      .map(x => ({ symbol: `${x.code}.KS`, name: x.name, exchange: x.marketType === '코스닥' ? 'KOSDAQ' : 'KOSPI', type: 'KR' }));
+      .map(({ item }) => ({ symbol: `${item.code}.KS`, name: item.name, exchange: item.marketType === '코스닥' ? 'KOSDAQ' : 'KOSPI', type: 'KR' }));
     let usMatches = [];
-    try {
-      const result = await yahooFinance.search(q, { quotesCount: 10 });
-      usMatches = (result.quotes || [])
-        .filter(x => ['EQUITY', 'ETF', 'INDEX', 'FUTURE'].includes(x.quoteType) && !x.symbol.match(/\.(KS|KQ|T|HK|AX)$/))
-        .slice(0, 10)
-        .map(x => ({ symbol: x.symbol, name: x.shortname || x.longname || x.symbol, exchange: x.exchange || 'US', type: x.quoteType === 'INDEX' ? 'INDEX' : 'US' }));
-    } catch (e) {
-      console.error('Yahoo search error:', e.message);
+    if (!isKoreanQuery) {
+      try {
+        const result = await yahooFinance.search(q, { quotesCount: 10 });
+        usMatches = (result.quotes || [])
+          .filter(x => ['EQUITY', 'ETF', 'INDEX', 'FUTURE'].includes(x.quoteType) && !x.symbol.match(/\.(KS|KQ|T|HK|AX)$/))
+          .slice(0, 10)
+          .map(x => ({ symbol: x.symbol, name: x.shortname || x.longname || x.symbol, exchange: x.exchange || 'US', type: x.quoteType === 'INDEX' ? 'INDEX' : 'US' }));
+      } catch (e) {
+        console.error('Yahoo search error:', e.message);
+      }
     }
     return res.json([...indexMatches, ...krxMatches, ...usMatches]);
   } catch (e) {
@@ -588,6 +1029,49 @@ app.get('/api/quote', async (req, res) => {
     console.error(`Quote error [${req.query.symbol}]:`, e.message);
     return res.status(500).json({ error: e.message });
   }
+});
+
+app.get('/api/stream/quote', async (req, res) => {
+  const { symbol } = req.query;
+  if (!symbol) return res.status(400).json({ error: 'symbol required' });
+  const topic = kisRealtimeTopic(symbol);
+  if (!topic) return res.status(400).json({ error: 'KIS realtime does not support this symbol' });
+
+  const id = `${topic.cacheKey}:${Date.now()}:${Math.random().toString(36).slice(2)}`;
+  res.writeHead(200, {
+    'Content-Type': 'text/event-stream; charset=utf-8',
+    'Cache-Control': 'no-cache, no-transform',
+    Connection: 'keep-alive',
+    'X-Accel-Buffering': 'no',
+  });
+  sendSse(res, 'ready', {
+    symbol: topic.cacheKey,
+    kind: topic.kind,
+    trId: topic.trId,
+    trKey: topic.trKey,
+    kisConfigured: hasKisConfig(),
+    source: hasKisConfig() ? 'kis-ws' : 'fallback',
+  });
+
+  realtimeClients.set(id, { symbol: topic.cacheKey, res });
+  const latest = realtimeQuotes.get(topic.cacheKey);
+  if (latest) sendSse(res, 'quote', latest);
+  registerRealtimeSymbol(symbol);
+
+  const heartbeat = setInterval(() => {
+    try {
+      sendSse(res, 'heartbeat', { ts: Date.now() });
+    } catch {
+      clearInterval(heartbeat);
+      realtimeClients.delete(id);
+    }
+  }, 25_000);
+
+  req.on('close', () => {
+    clearInterval(heartbeat);
+    realtimeClients.delete(id);
+    if (!hasRealtimeClientForSymbol(topic.cacheKey)) unsubscribeKisSymbol(topic.cacheKey);
+  });
 });
 
 app.post('/api/analyze', async (req, res) => {
